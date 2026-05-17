@@ -11,6 +11,22 @@ $repo = new JobRepository(db());
 $created = (int)($_GET['created'] ?? 0);
 $message = null;
 
+function job_progress_label(array $job): string
+{
+    $total = $job['progress_total'] === null ? null : (int)$job['progress_total'];
+    $current = (int)$job['progress_current'];
+    return $total && $total > 0 ? format_bytes($current) . ' / ' . format_bytes($total) : (string)$current;
+}
+
+function job_progress_percent(array $job): float
+{
+    $total = $job['progress_total'] === null ? null : (int)$job['progress_total'];
+    if (!$total || $total <= 0) {
+        return 0.0;
+    }
+    return max(0.0, min(100.0, ((int)$job['progress_current'] / $total) * 100.0));
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     $id = (int)($_POST['id'] ?? 0);
@@ -51,7 +67,7 @@ render_header('Jobs');
 
 <div class="card">
     <h2>Background jobs</h2>
-    <p class="muted">Scans and future move operations run from the CLI worker. Cancel requests are checked during worker progress updates. Stale running jobs are automatically requeued when the worker starts.</p>
+    <p class="muted">Scans and future move operations run from the CLI worker. This page updates job status every 5 seconds without refreshing.</p>
     <form method="post" onsubmit="return confirm('Remove all complete, failed, and cancelled jobs?');">
         <input type="hidden" name="action" value="delete_finished">
         <button class="danger" type="submit">Remove finished jobs</button>
@@ -61,23 +77,26 @@ render_header('Jobs');
         <tbody>
         <?php foreach ($jobs as $job): ?>
             <?php
-            $total = $job['progress_total'] === null ? null : (int)$job['progress_total'];
-            $current = (int)$job['progress_current'];
-            $progress = $total && $total > 0 ? $current . ' / ' . $total : (string)$current;
             $status = (string)$job['status'];
             $cancelRequested = (int)($job['cancel_requested'] ?? 0) === 1;
+            $percent = job_progress_percent($job);
             ?>
-            <tr>
+            <tr data-job-id="<?= e((string)$job['id']) ?>">
                 <td><?= e((string)$job['id']) ?></td>
-                <td><?= e($job['job_type']) ?></td>
-                <td><?= e($status) ?></td>
-                <td><?= $cancelRequested ? 'Yes' : 'No' ?></td>
-                <td><?= e($progress) ?></td>
-                <td><?= e($job['progress_message']) ?></td>
-                <td><?= e($job['error_message']) ?></td>
-                <td><?= e($job['last_heartbeat_at'] ?? '') ?></td>
-                <td><?= e($job['created_at']) ?></td>
-                <td><?= e($job['finished_at']) ?></td>
+                <td data-field="job_type"><?= e($job['job_type']) ?></td>
+                <td data-field="status"><?= e($status) ?></td>
+                <td data-field="cancel_requested"><?= $cancelRequested ? 'Yes' : 'No' ?></td>
+                <td>
+                    <div class="job-progress-wrap">
+                        <div class="job-progress-bar"><div class="job-progress-fill" data-field="progress_bar" style="width: <?= e(number_format($percent, 2, '.', '')) ?>%"></div></div>
+                        <div class="job-progress-text"><span data-field="progress_label"><?= e(job_progress_label($job)) ?></span> <span data-field="progress_percent"><?= $job['progress_total'] ? e(number_format($percent, 1) . '%') : '' ?></span></div>
+                    </div>
+                </td>
+                <td data-field="progress_message"><?= e($job['progress_message']) ?></td>
+                <td data-field="error_message"><?= e($job['error_message']) ?></td>
+                <td data-field="last_heartbeat_at"><?= e($job['last_heartbeat_at'] ?? '') ?></td>
+                <td data-field="created_at"><?= e($job['created_at']) ?></td>
+                <td data-field="finished_at"><?= e($job['finished_at']) ?></td>
                 <td class="actions">
                     <?php if (in_array($status, ['queued', 'running'], true) && !$cancelRequested): ?>
                         <form method="post" style="display:inline">
@@ -105,5 +124,56 @@ render_header('Jobs');
         <?php endforeach; ?>
         </tbody>
     </table>
+    <p class="muted" id="jobs-last-updated">Waiting for status update...</p>
 </div>
+<script>
+function setText(row, field, value) {
+    const cell = row.querySelector('[data-field="' + field + '"]');
+    if (cell) {
+        cell.textContent = value || '';
+    }
+}
+
+async function refreshJobs() {
+    try {
+        const response = await fetch('jobs-status.php?limit=100&ts=' + Date.now(), { cache: 'no-store' });
+        if (!response.ok) {
+            throw new Error('HTTP ' + response.status);
+        }
+        const data = await response.json();
+        data.jobs.forEach(function(job) {
+            const row = document.querySelector('tr[data-job-id="' + job.id + '"]');
+            if (!row) {
+                return;
+            }
+            setText(row, 'job_type', job.job_type);
+            setText(row, 'status', job.status);
+            setText(row, 'cancel_requested', job.cancel_requested ? 'Yes' : 'No');
+            setText(row, 'progress_label', job.progress_label);
+            setText(row, 'progress_percent', job.progress_percent_label === '-' ? '' : job.progress_percent_label);
+            setText(row, 'progress_message', job.progress_message);
+            setText(row, 'error_message', job.error_message);
+            setText(row, 'last_heartbeat_at', job.last_heartbeat_at);
+            setText(row, 'created_at', job.created_at);
+            setText(row, 'finished_at', job.finished_at);
+            const bar = row.querySelector('[data-field="progress_bar"]');
+            if (bar) {
+                bar.style.width = Math.max(0, Math.min(100, Number(job.progress_percent || 0))) + '%';
+            }
+        });
+        const updated = document.getElementById('jobs-last-updated');
+        if (updated) {
+            updated.textContent = 'Last updated: ' + data.updated_at;
+        }
+    } catch (error) {
+        const updated = document.getElementById('jobs-last-updated');
+        if (updated) {
+            updated.textContent = 'Status update failed: ' + error.message;
+        }
+    }
+}
+
+refreshJobs();
+setInterval(refreshJobs, 5000);
+</script>
 <?php render_footer(); ?>
