@@ -42,9 +42,10 @@ final class DriveRepository
             return (int)$existing['id'];
         }
 
-        $stmt = $this->db->prepare('INSERT INTO drives (friendly_name, serial_number, hardware_serial, filesystem_uuid, volume_label, model, vendor, filesystem, mount_path, device_name, identity_source, total_bytes, free_bytes, used_bytes, notes, is_active, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())');
+        $stmt = $this->db->prepare('INSERT INTO drives (friendly_name, form_factor, serial_number, hardware_serial, filesystem_uuid, volume_label, model, vendor, filesystem, mount_path, device_name, identity_source, total_bytes, free_bytes, used_bytes, notes, is_active, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())');
         $stmt->execute([
             $data['friendly_name'],
+            $this->normaliseFormFactor($data['form_factor'] ?? '3.5'),
             $data['serial_number'],
             $data['hardware_serial'] ?? null,
             $data['filesystem_uuid'] ?? null,
@@ -79,10 +80,12 @@ final class DriveRepository
         }
 
         $friendlyName = $allowFriendlyNameUpdate ? (string)($data['friendly_name'] ?? $existing['friendly_name']) : (string)$existing['friendly_name'];
+        $formFactor = $this->normaliseFormFactor($existing['form_factor'] ?? '3.5');
 
-        $stmt = $this->db->prepare('UPDATE drives SET friendly_name = ?, serial_number = ?, hardware_serial = ?, filesystem_uuid = ?, volume_label = ?, model = ?, vendor = ?, filesystem = ?, mount_path = ?, device_name = ?, identity_source = ?, total_bytes = ?, free_bytes = ?, used_bytes = ?, notes = ?, is_active = ?, last_seen_at = NOW() WHERE id = ?');
+        $stmt = $this->db->prepare('UPDATE drives SET friendly_name = ?, form_factor = ?, serial_number = ?, hardware_serial = ?, filesystem_uuid = ?, volume_label = ?, model = ?, vendor = ?, filesystem = ?, mount_path = ?, device_name = ?, identity_source = ?, total_bytes = ?, free_bytes = ?, used_bytes = ?, notes = ?, is_active = ?, last_seen_at = NOW() WHERE id = ?');
         $stmt->execute([
             $friendlyName,
+            $formFactor,
             $newSerial,
             $data['hardware_serial'] ?? null,
             $data['filesystem_uuid'] ?? null,
@@ -104,9 +107,10 @@ final class DriveRepository
 
     public function updateManual(int $id, array $data): void
     {
-        $stmt = $this->db->prepare('UPDATE drives SET friendly_name = ?, notes = ?, is_active = ? WHERE id = ?');
+        $stmt = $this->db->prepare('UPDATE drives SET friendly_name = ?, form_factor = ?, notes = ?, is_active = ? WHERE id = ?');
         $stmt->execute([
             $data['friendly_name'],
+            $this->normaliseFormFactor($data['form_factor'] ?? '3.5'),
             $data['notes'] ?: null,
             isset($data['is_active']) ? 1 : 0,
             $id,
@@ -138,5 +142,10 @@ final class DriveRepository
     {
         $stmt = $this->db->prepare('UPDATE drives SET last_scanned_at = NOW() WHERE id = ?');
         $stmt->execute([$id]);
+    }
+
+    private function normaliseFormFactor(string $formFactor): string
+    {
+        return in_array($formFactor, ['3.5', '2.5', 'M2'], true) ? $formFactor : '3.5';
     }
 }
