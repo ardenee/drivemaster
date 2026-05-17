@@ -24,6 +24,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $repo->requeue($id);
         $message = 'Job requeued: ' . $id;
     }
+
+    if ($id > 0 && $action === 'delete') {
+        $stmt = db()->prepare('DELETE FROM jobs WHERE id = ? AND status <> "running"');
+        $stmt->execute([$id]);
+        $message = $stmt->rowCount() > 0 ? 'Job removed: ' . $id : 'Running jobs must be cancelled before they can be removed.';
+    }
+
+    if ($action === 'delete_finished') {
+        db()->exec("DELETE FROM jobs WHERE status IN ('complete','failed','cancelled')");
+        $message = 'Finished jobs removed.';
+    }
 }
 
 $jobs = $repo->all(100);
@@ -41,7 +52,11 @@ render_header('Jobs');
 <div class="card">
     <h2>Background jobs</h2>
     <p class="muted">Scans and future move operations run from the CLI worker. Cancel requests are checked during worker progress updates. Stale running jobs are automatically requeued when the worker starts.</p>
-    <table>
+    <form method="post" onsubmit="return confirm('Remove all complete, failed, and cancelled jobs?');">
+        <input type="hidden" name="action" value="delete_finished">
+        <button class="danger" type="submit">Remove finished jobs</button>
+    </form>
+    <table class="jobs-table">
         <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Cancel</th><th>Progress</th><th>Message</th><th>Error</th><th>Heartbeat</th><th>Created</th><th>Finished</th><th>Actions</th></tr></thead>
         <tbody>
         <?php foreach ($jobs as $job): ?>
@@ -76,6 +91,13 @@ render_header('Jobs');
                             <input type="hidden" name="id" value="<?= e((string)$job['id']) ?>">
                             <input type="hidden" name="action" value="requeue">
                             <button type="submit">Requeue</button>
+                        </form>
+                    <?php endif; ?>
+                    <?php if ($status !== 'running'): ?>
+                        <form method="post" style="display:inline" onsubmit="return confirm('Remove this job from history?');">
+                            <input type="hidden" name="id" value="<?= e((string)$job['id']) ?>">
+                            <input type="hidden" name="action" value="delete">
+                            <button class="danger" type="submit">Remove</button>
                         </form>
                     <?php endif; ?>
                 </td>
