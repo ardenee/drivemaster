@@ -7,6 +7,90 @@ require __DIR__ . '/_layout.php';
 
 $drives = db()->query('SELECT id, friendly_name, mount_path FROM drives ORDER BY friendly_name')->fetchAll();
 $categories = db()->query('SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name')->fetchAll();
+$message = null;
+$error = null;
+
+function selected_ids_from_post(): array
+{
+    $raw = trim((string)($_POST['selected_ids'] ?? ''));
+    if ($raw === '') {
+        return [];
+    }
+    return array_values(array_unique(array_filter(array_map('intval', explode(',', $raw)), static fn(int $id): bool => $id > 0)));
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = $_POST['action'] ?? '';
+    $returnUrl = $_POST['return_url'] ?? 'files.php';
+    $selectedIds = selected_ids_from_post();
+
+    try {
+        if (!$selectedIds) {
+            throw new RuntimeException('No file/folder selection was supplied.');
+        }
+
+        if ($action === 'add_category' || $action === 'remove_category') {
+            $categoryIdPost = (int)($_POST['context_category_id'] ?? 0);
+            if ($categoryIdPost <= 0) {
+                throw new RuntimeException('No category was selected.');
+            }
+
+            $placeholders = implode(',', array_fill(0, count($selectedIds), '?'));
+            $stmt = db()->prepare("SELECT id, drive_id, relative_path, entry_type FROM file_entries WHERE id IN ({$placeholders}) AND entry_type = 'folder'");
+            $stmt->execute($selectedIds);
+            $folders = $stmt->fetchAll();
+
+            foreach ($folders as $folder) {
+                if ($action === 'add_category') {
+                    $stmt = db()->prepare("INSERT INTO category_assignments (category_id, drive_id, path_prefix, assignment_type)
+                        SELECT ?, ?, ?, 'folder_rule'
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM category_assignments
+                            WHERE category_id = ? AND drive_id = ? AND path_prefix = ? AND assignment_type = 'folder_rule'
+                        )");
+                    $stmt->execute([$categoryIdPost, $folder['drive_id'], $folder['relative_path'], $categoryIdPost, $folder['drive_id'], $folder['relative_path']]);
+                } else {
+                    $stmt = db()->prepare("DELETE FROM category_assignments WHERE category_id = ? AND drive_id = ? AND path_prefix = ? AND assignment_type = 'folder_rule'");
+                    $stmt->execute([$categoryIdPost, $folder['drive_id'], $folder['relative_path']]);
+                }
+            }
+        }
+
+        if (in_array($action, ['queue_move', 'queue_delete', 'queue_rename'], true)) {
+            $jobRepo = new \DriveMaster\Repository\JobRepository(db());
+            $payload = ['file_entry_ids' => $selectedIds];
+            $jobType = match ($action) {
+                'queue_move' => 'file_move',
+                'queue_delete' => 'file_delete',
+                'queue_rename' => 'file_rename',
+            };
+
+            if ($action === 'queue_move') {
+                $destinationDriveId = (int)($_POST['destination_drive_id'] ?? 0);
+                if ($destinationDriveId <= 0) {
+                    throw new RuntimeException('No destination drive was selected.');
+                }
+                $payload['destination_drive_id'] = $destinationDriveId;
+            }
+
+            if ($action === 'queue_rename') {
+                $newName = trim((string)($_POST['new_name'] ?? ''));
+                if ($newName === '') {
+                    throw new RuntimeException('No new name was supplied.');
+                }
+                $payload['new_name'] = $newName;
+            }
+
+            $jobRepo->create($jobType, $payload);
+        }
+
+        header('Location: ' . $returnUrl);
+        exit;
+    } catch (Throwable $e) {
+        $error = $e->getMessage();
+    }
+}
+
 $driveId = (int)($_GET['drive_id'] ?? ($drives[0]['id'] ?? 0));
 $currentPath = trim($_GET['path'] ?? '');
 $selectedEntryId = (int)($_GET['selected_entry_id'] ?? 0);
@@ -25,7 +109,11 @@ $minSize = trim($_GET['min_size'] ?? '');
 $maxSize = trim($_GET['max_size'] ?? '');
 $modifiedFrom = trim($_GET['modified_from'] ?? '');
 $modifiedTo = trim($_GET['modified_to'] ?? '');
-$resultLimit = $_GET['result_limit'] ?? '1000';
+$resultLimit = (string)($_GET['result_limit'] ?? '1000');
+$allowedResultLimits = ['100', '500', '1000', '5000', '10000', 'none'];
+if (!in_array($resultLimit, $allowedResultLimits, true)) {
+    $resultLimit = '1000';
+}
 $resultSort = $_GET['result_sort'] ?? 'drive';
 $resultDir = strtolower($_GET['result_dir'] ?? 'asc') === 'desc' ? 'desc' : 'asc';
 $resultNextDir = $resultDir === 'asc' ? 'desc' : 'asc';
@@ -136,6 +224,10 @@ foreach ($drives as $drive) {
         $selectedDrive = $drive;
         break;
     }
+}
+if (!$selectedDrive && $drives) {
+    $selectedDrive = $drives[0];
+    $driveId = (int)$selectedDrive['id'];
 }
 
 $children = [];
@@ -251,6 +343,10 @@ if ($hasSearch) {
 
 render_header('Files');
 ?>
+<?php if ($error): ?>
+    <div class="card"><strong>Error:</strong> <?= e($error) ?></div>
+<?php endif; ?>
+
 <div class="card">
     <h2>File Search</h2>
     <form method="get">
@@ -317,14 +413,9 @@ render_header('Files');
                 <?php foreach ($searchResults as $result): ?>
                     <?php
                     $targetPath = path_parent($result['relative_path']);
-                    $targetUrl = explorer_link([
-                        'drive_id' => $result['drive_id'],
-                        'path' => $targetPath,
-                        'expanded_drive_id' => $result['drive_id'],
-                        'selected_entry_id' => $result['id'],
-                    ]);
+                    $targetUrl = explorer_link(['drive_id' => $result['drive_id'], 'path' => $targetPath, 'expanded_drive_id' => $result['drive_id'], 'selected_entry_id' => $result['id']]);
                     ?>
-                    <tr class="search-result-row selectable-row" data-url="<?= e($targetUrl) ?>" data-size="<?= e((string)(int)$result['size_bytes']) ?>" data-is-file="<?= $result['entry_type'] === 'file' ? '1' : '0' ?>">
+                    <tr class="search-result-row selectable-row" data-id="<?= e((string)$result['id']) ?>" data-entry-type="<?= e($result['entry_type']) ?>" data-entry-name="<?= e($result['name']) ?>" data-url="<?= e($targetUrl) ?>" data-size="<?= e((string)(int)$result['size_bytes']) ?>" data-is-file="<?= $result['entry_type'] === 'file' ? '1' : '0' ?>">
                         <td class="wrap-cell"><?= e($result['friendly_name']) ?></td>
                         <td class="wrap-cell"><?= $result['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= highlight_match($result['name'], $highlightTerms) ?></td>
                         <td class="wrap-cell"><?= e($result['entry_type'] === 'folder' ? 'Folder' : (($result['extension'] ?? '') !== '' ? strtoupper($result['extension']) . ' File' : 'File')) ?></td>
@@ -345,7 +436,7 @@ render_header('Files');
 </div>
 <?php endif; ?>
 
-<?php if (!$selectedDrive): ?>
+<?php if (!$drives): ?>
     <div class="card"><p>No drives have been scanned yet.</p></div>
 <?php else: ?>
     <div class="card explorer-wrap" id="explorer-panel">
@@ -368,7 +459,7 @@ render_header('Files');
         </div>
         <div class="explorer-main">
             <div class="breadcrumbs">
-                <a href="<?= e(explorer_link(['path' => '', 'drive_id' => $driveId, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null])) ?>"><?= e($selectedDrive['friendly_name']) ?></a>
+                <a href="<?= e(explorer_link(['path' => '', 'drive_id' => $driveId, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null])) ?>"><?= e($selectedDrive['friendly_name'] ?? 'Drive') ?></a>
                 <?php foreach ($breadcrumbs as $crumb): ?>
                     / <a href="<?= e(explorer_link(['path' => $crumb['path'], 'drive_id' => $driveId, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null])) ?>"><?= e($crumb['name']) ?></a>
                 <?php endforeach; ?>
@@ -386,15 +477,12 @@ render_header('Files');
                 <tbody>
                     <?php if ($currentPath !== ''): ?>
                         <tr class="explorer-row" data-url="<?= e(explorer_link(['path' => path_parent($currentPath), 'expanded_drive_id' => $driveId, 'selected_entry_id' => null])) ?>" data-size="0" data-is-file="0">
-                            <td>↩ ..</td>
-                            <td>Folder</td>
-                            <td></td>
-                            <td></td>
+                            <td>↩ ..</td><td>Folder</td><td></td><td></td>
                         </tr>
                     <?php endif; ?>
                     <?php foreach ($children as $entry): ?>
                         <?php $entryUrl = $entry['entry_type'] === 'folder' ? explorer_link(['path' => $entry['relative_path'], 'expanded_drive_id' => $driveId, 'selected_entry_id' => null]) : ''; ?>
-                        <tr id="entry-<?= e((string)$entry['id']) ?>" class="explorer-row selectable-row <?= $selectedEntryId === (int)$entry['id'] ? 'selected-row target-selected-row' : '' ?>" data-url="<?= e($entryUrl) ?>" data-size="<?= e((string)(int)$entry['size_bytes']) ?>" data-is-file="<?= $entry['entry_type'] === 'file' ? '1' : '0' ?>">
+                        <tr id="entry-<?= e((string)$entry['id']) ?>" class="explorer-row selectable-row <?= $selectedEntryId === (int)$entry['id'] ? 'selected-row target-selected-row' : '' ?>" data-id="<?= e((string)$entry['id']) ?>" data-entry-type="<?= e($entry['entry_type']) ?>" data-entry-name="<?= e($entry['name']) ?>" data-url="<?= e($entryUrl) ?>" data-size="<?= e((string)(int)$entry['size_bytes']) ?>" data-is-file="<?= $entry['entry_type'] === 'file' ? '1' : '0' ?>">
                             <td class="wrap-cell"><?= $entry['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= highlight_match($entry['name'], $highlightTerms) ?></td>
                             <td class="wrap-cell"><?= e($entry['entry_type'] === 'folder' ? 'Folder' : (($entry['extension'] ?? '') !== '' ? strtoupper($entry['extension']) . ' File' : 'File')) ?></td>
                             <td><?= $entry['entry_type'] === 'file' ? e(format_bytes((int)$entry['size_bytes'])) : '' ?></td>
@@ -412,36 +500,86 @@ render_header('Files');
         </div>
     </div>
 <?php endif; ?>
+
+<div id="context-menu" class="context-menu">
+    <button type="button" data-context-action="add_category">Add folder to category</button>
+    <button type="button" data-context-action="remove_category">Remove folder from category</button>
+    <hr>
+    <button type="button" data-context-action="rename">Rename...</button>
+    <button type="button" data-context-action="move">Move...</button>
+    <button type="button" data-context-action="delete">Delete...</button>
+</div>
+
+<form method="post" id="context-form">
+    <input type="hidden" name="return_url" value="<?= e($_SERVER['REQUEST_URI'] ?? 'files.php') ?>">
+    <input type="hidden" name="action" id="context-action-input">
+    <input type="hidden" name="selected_ids" id="context-selected-ids">
+    <div id="context-dialog" class="context-dialog hidden">
+        <div class="context-dialog-card">
+            <h3 id="context-dialog-title">Action</h3>
+            <div id="context-category-area">
+                <label>Category
+                    <select name="context_category_id">
+                        <?php foreach ($categories as $category): ?>
+                            <option value="<?= e((string)$category['id']) ?>"><?= e($category['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+            </div>
+            <div id="context-move-area">
+                <label>Destination drive
+                    <select name="destination_drive_id">
+                        <?php foreach ($drives as $drive): ?>
+                            <option value="<?= e((string)$drive['id']) ?>"><?= e($drive['friendly_name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+            </div>
+            <div id="context-rename-area">
+                <label>New name <input type="text" name="new_name" id="context-new-name"></label>
+            </div>
+            <p id="context-dialog-note" class="muted"></p>
+            <p><button type="submit">Confirm</button> <button type="button" id="context-cancel-button">Cancel</button></p>
+        </div>
+    </div>
+</form>
+
 <script>
 function formatBytes(bytes) {
     bytes = Number(bytes || 0);
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
     let index = 0;
-    while (bytes >= 1024 && index < units.length - 1) {
-        bytes /= 1024;
-        index++;
-    }
+    while (bytes >= 1024 && index < units.length - 1) { bytes /= 1024; index++; }
     return index === 0 ? Math.round(bytes) + ' ' + units[index] : bytes.toFixed(2) + ' ' + units[index];
 }
 
 function updateStatus(table) {
     const status = document.getElementById(table.getAttribute('data-status-target'));
-    if (!status) {
-        return;
-    }
+    if (!status) { return; }
     const selected = table.querySelectorAll('.selectable-row.selected-row');
     let selectedSize = 0;
     selected.forEach(function (row) {
-        if (row.getAttribute('data-is-file') === '1') {
-            selectedSize += Number(row.getAttribute('data-size') || 0);
-        }
+        if (row.getAttribute('data-is-file') === '1') { selectedSize += Number(row.getAttribute('data-size') || 0); }
     });
-    status.textContent = 'Items: ' + status.getAttribute('data-total-count') +
-        ' | Files: ' + status.getAttribute('data-file-count') +
-        ' | Folders: ' + status.getAttribute('data-folder-count') +
-        ' | Total file size: ' + formatBytes(status.getAttribute('data-total-size')) +
-        ' | Selected: ' + selected.length +
-        ' | Selected size: ' + formatBytes(selectedSize);
+    status.textContent = 'Items: ' + status.getAttribute('data-total-count') + ' | Files: ' + status.getAttribute('data-file-count') + ' | Folders: ' + status.getAttribute('data-folder-count') + ' | Total file size: ' + formatBytes(status.getAttribute('data-total-size')) + ' | Selected: ' + selected.length + ' | Selected size: ' + formatBytes(selectedSize);
+}
+
+function selectedRowsInTable(table) {
+    return Array.from(table.querySelectorAll('.selectable-row.selected-row'));
+}
+
+function selectedIdsForRow(row) {
+    const table = row.closest('.selectable-table');
+    const selected = table ? selectedRowsInTable(table) : [row];
+    const rows = selected.includes(row) ? selected : [row];
+    return rows.map(function (item) { return item.getAttribute('data-id'); }).filter(Boolean);
+}
+
+function selectedTypesForRow(row) {
+    const table = row.closest('.selectable-table');
+    const selected = table ? selectedRowsInTable(table) : [row];
+    const rows = selected.includes(row) ? selected : [row];
+    return rows.map(function (item) { return item.getAttribute('data-entry-type'); });
 }
 
 document.querySelectorAll('.tree-drive, .tree-folder, .explorer-row, .search-result-row').forEach(function (row) {
@@ -460,19 +598,66 @@ document.querySelectorAll('.tree-drive, .tree-folder, .explorer-row, .search-res
     });
     row.addEventListener('dblclick', function () {
         const url = row.getAttribute('data-url');
-        if (url) {
-            window.location.href = url;
-        }
+        if (url) { window.location.href = url; }
     });
+});
+
+const contextMenu = document.getElementById('context-menu');
+const contextDialog = document.getElementById('context-dialog');
+let contextRow = null;
+
+document.querySelectorAll('.explorer-row.selectable-row').forEach(function (row) {
+    row.addEventListener('contextmenu', function (event) {
+        event.preventDefault();
+        contextRow = row;
+        if (!row.classList.contains('selected-row')) {
+            const table = row.closest('.selectable-table');
+            table.querySelectorAll('.selected-row').forEach(function (selected) { selected.classList.remove('selected-row'); });
+            row.classList.add('selected-row');
+            updateStatus(table);
+        }
+        const types = selectedTypesForRow(row);
+        const allFolders = types.length > 0 && types.every(function (type) { return type === 'folder'; });
+        contextMenu.querySelector('[data-context-action="add_category"]').disabled = !allFolders;
+        contextMenu.querySelector('[data-context-action="remove_category"]').disabled = !allFolders;
+        contextMenu.style.left = event.pageX + 'px';
+        contextMenu.style.top = event.pageY + 'px';
+        contextMenu.classList.add('visible');
+    });
+});
+
+document.addEventListener('click', function (event) {
+    if (!contextMenu.contains(event.target)) { contextMenu.classList.remove('visible'); }
+});
+
+document.querySelectorAll('[data-context-action]').forEach(function (button) {
+    button.addEventListener('click', function () {
+        if (!contextRow || button.disabled) { return; }
+        const action = button.getAttribute('data-context-action');
+        const selectedIds = selectedIdsForRow(contextRow);
+        document.getElementById('context-selected-ids').value = selectedIds.join(',');
+        document.getElementById('context-new-name').value = contextRow.getAttribute('data-entry-name') || '';
+        document.getElementById('context-category-area').style.display = ['add_category', 'remove_category'].includes(action) ? 'block' : 'none';
+        document.getElementById('context-move-area').style.display = action === 'move' ? 'block' : 'none';
+        document.getElementById('context-rename-area').style.display = action === 'rename' ? 'block' : 'none';
+        const actionMap = { add_category: 'add_category', remove_category: 'remove_category', rename: 'queue_rename', move: 'queue_move', delete: 'queue_delete' };
+        document.getElementById('context-action-input').value = actionMap[action];
+        document.getElementById('context-dialog-title').textContent = button.textContent;
+        document.getElementById('context-dialog-note').textContent = ['move', 'delete', 'rename'].includes(action) ? 'This queues a background operation job. The safe file-operation executor still needs to be completed before it will modify disks.' : 'Category changes apply to selected folders only.';
+        contextMenu.classList.remove('visible');
+        contextDialog.classList.remove('hidden');
+    });
+});
+
+document.getElementById('context-cancel-button').addEventListener('click', function () {
+    contextDialog.classList.add('hidden');
 });
 
 const target = document.querySelector('.target-selected-row');
 if (target) {
     target.classList.add('selected-row');
     const table = target.closest('.selectable-table');
-    if (table) {
-        updateStatus(table);
-    }
+    if (table) { updateStatus(table); }
     target.scrollIntoView({ block: 'center', inline: 'nearest' });
 }
 
