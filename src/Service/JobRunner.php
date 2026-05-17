@@ -105,8 +105,7 @@ final class JobRunner
         $this->jobs->progress($jobId, 0, 1, 'Refreshing drive info: ' . $path);
 
         $info = $this->discovery->describePath($path);
-        $this->drives->upsert([
-            'friendly_name' => $drive['friendly_name'],
+        $this->drives->updateDiscoveredInfo($driveId, [
             'serial_number' => $info['serial_number'],
             'hardware_serial' => $info['hardware_serial'] ?? null,
             'filesystem_uuid' => $info['filesystem_uuid'] ?? null,
@@ -122,7 +121,7 @@ final class JobRunner
             'used_bytes' => (int)$info['used_bytes'],
             'notes' => $drive['notes'] ?? null,
             'is_active' => (int)$drive['is_active'],
-        ]);
+        ], false);
 
         $this->jobs->progress($jobId, 1, 1, 'Drive info refreshed');
         $this->jobs->complete($jobId, ['drive_id' => $driveId, 'path' => $path]);
