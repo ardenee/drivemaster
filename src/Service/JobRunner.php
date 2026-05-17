@@ -52,6 +52,7 @@ final class JobRunner
             throw new \RuntimeException('Scan job is missing friendly name.');
         }
 
+        $this->throwIfCancelled($jobId);
         $this->jobs->progress($jobId, 0, null, 'Preparing scan: ' . $path);
 
         if ($serialNumber === null) {
@@ -61,10 +62,19 @@ final class JobRunner
 
         $scanner = new DriveScanner($this->db, $this->drives);
         $scanRunId = $scanner->scan($path, $friendlyName, $serialNumber, function (array $stats, string $message) use ($jobId): void {
+            $this->throwIfCancelled($jobId);
             $current = (int)$stats['files'] + (int)$stats['folders'];
             $this->jobs->progress($jobId, $current, null, $message);
         });
 
+        $this->throwIfCancelled($jobId);
         $this->jobs->complete($jobId, ['scan_run_id' => $scanRunId]);
+    }
+
+    private function throwIfCancelled(int $jobId): void
+    {
+        if ($this->jobs->isCancelled($jobId)) {
+            throw new \RuntimeException('Job was cancelled.');
+        }
     }
 }
