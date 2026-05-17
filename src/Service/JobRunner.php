@@ -20,6 +20,8 @@ final class JobRunner
 
     public function runNext(string $workerId): bool
     {
+        $this->jobs->requeueStaleRunning();
+
         $job = $this->jobs->claimNext($workerId);
         if (!$job) {
             return false;
@@ -33,7 +35,11 @@ final class JobRunner
                 default => throw new \RuntimeException('Unknown job type: ' . $job['job_type']),
             };
         } catch (Throwable $e) {
-            $this->jobs->fail((int)$job['id'], $e->getMessage());
+            if ($this->jobs->isCancelRequested((int)$job['id'])) {
+                $this->jobs->markCancelled((int)$job['id']);
+            } else {
+                $this->jobs->fail((int)$job['id'], $e->getMessage());
+            }
         }
 
         return true;
@@ -61,11 +67,17 @@ final class JobRunner
         }
 
         $scanner = new DriveScanner($this->db, $this->drives);
-        $scanRunId = $scanner->scan($path, $friendlyName, $serialNumber, function (array $stats, string $message) use ($jobId): void {
-            $this->throwIfCancelled($jobId);
-            $current = (int)$stats['files'] + (int)$stats['folders'];
-            $this->jobs->progress($jobId, $current, null, $message);
-        });
+        $scanRunId = $scanner->scan(
+            $path,
+            $friendlyName,
+            $serialNumber,
+            function (array $stats, string $message) use ($jobId): void {
+                $this->throwIfCancelled($jobId);
+                $current = (int)$stats['files'] + (int)$stats['folders'];
+                $this->jobs->progress($jobId, $current, null, $message);
+            },
+            fn(): bool => $this->jobs->isCancelRequested($jobId)
+        );
 
         $this->throwIfCancelled($jobId);
         $this->jobs->complete($jobId, ['scan_run_id' => $scanRunId]);
@@ -73,7 +85,7 @@ final class JobRunner
 
     private function throwIfCancelled(int $jobId): void
     {
-        if ($this->jobs->isCancelled($jobId)) {
+        if ($this->jobs->isCancelRequested($jobId)) {
             throw new \RuntimeException('Job was cancelled.');
         }
     }
