@@ -12,6 +12,8 @@ use Throwable;
 
 final class DriveScanner
 {
+    private const MAX_EXTENSION_LENGTH = 50;
+
     public function __construct(private PDO $db, private DriveRepository $drives)
     {
     }
@@ -112,7 +114,7 @@ final class DriveScanner
 
     private function upsertEntry(int $driveId, int $scanRunId, string $fullPath, string $relativePath, string $name, string $parentPath, bool $isDir, int $size, int $modifiedTime): void
     {
-        $extension = $isDir ? null : strtolower(pathinfo($name, PATHINFO_EXTENSION));
+        $extension = $this->safeExtension($isDir, $name);
         $entryType = $isDir ? 'folder' : 'file';
         $modifiedAt = date('Y-m-d H:i:s', $modifiedTime);
 
@@ -120,7 +122,26 @@ final class DriveScanner
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NOW())
                 ON DUPLICATE KEY UPDATE scan_run_id = VALUES(scan_run_id), parent_path = VALUES(parent_path), full_path = VALUES(full_path), name = VALUES(name), extension = VALUES(extension), entry_type = VALUES(entry_type), size_bytes = VALUES(size_bytes), modified_at = VALUES(modified_at), is_missing = 0, last_seen_at = NOW()';
         $stmt = $this->db->prepare($sql);
-        $stmt->execute([$driveId, $scanRunId, $parentPath, $fullPath, $relativePath, $name, $extension ?: null, $entryType, $size, $modifiedAt]);
+        $stmt->execute([$driveId, $scanRunId, $parentPath, $fullPath, $relativePath, $name, $extension, $entryType, $size, $modifiedAt]);
+    }
+
+    private function safeExtension(bool $isDir, string $name): ?string
+    {
+        if ($isDir) {
+            return null;
+        }
+
+        $extension = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+        if ($extension === '') {
+            return null;
+        }
+
+        $length = function_exists('mb_strlen') ? mb_strlen($extension, 'UTF-8') : strlen($extension);
+        if ($length > self::MAX_EXTENSION_LENGTH) {
+            return null;
+        }
+
+        return $extension;
     }
 
     private function startScanRun(int $driveId, string $rootPath): int
