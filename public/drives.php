@@ -15,23 +15,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'save') {
         $id = (int)($_POST['id'] ?? 0);
-        $data = [
-            'friendly_name' => trim($_POST['friendly_name'] ?? ''),
-            'serial_number' => trim($_POST['serial_number'] ?? ''),
-            'volume_label' => trim($_POST['volume_label'] ?? ''),
-            'filesystem' => trim($_POST['filesystem'] ?? ''),
-            'mount_path' => trim($_POST['mount_path'] ?? ''),
-            'total_bytes' => (int)($_POST['total_bytes'] ?? 0),
-            'free_bytes' => (int)($_POST['free_bytes'] ?? 0),
-            'used_bytes' => (int)($_POST['used_bytes'] ?? 0),
-            'notes' => trim($_POST['notes'] ?? ''),
-            'is_active' => $_POST['is_active'] ?? null,
-        ];
+        $existing = $id > 0 ? $repo->find($id) : null;
 
-        if ($id > 0) {
+        if ($existing) {
+            $data = [
+                'friendly_name' => trim($_POST['friendly_name'] ?? ''),
+                'serial_number' => $existing['serial_number'],
+                'volume_label' => $existing['volume_label'] ?? '',
+                'filesystem' => $existing['filesystem'] ?? '',
+                'mount_path' => $existing['mount_path'] ?? '',
+                'total_bytes' => (int)$existing['total_bytes'],
+                'free_bytes' => (int)$existing['free_bytes'],
+                'used_bytes' => (int)$existing['used_bytes'],
+                'notes' => trim($_POST['notes'] ?? ''),
+                'is_active' => $_POST['is_active'] ?? null,
+            ];
+
             $repo->updateManual($id, $data);
-        } else {
-            $repo->upsert($data);
         }
 
         header('Location: drives.php');
@@ -54,25 +54,30 @@ $drives = $repo->all();
 render_header('Drives');
 ?>
 <div class="card">
-    <h2><?= $editDrive ? 'Edit drive' : 'Add drive' ?></h2>
+    <h2>Drive management</h2>
+    <p class="muted">Drives are added by scanning connected/mounted drives from the Scan page. This page only edits friendly metadata or deletes existing inventory records.</p>
+    <p><a class="button" href="scan.php">Scan connected drive</a></p>
+</div>
+
+<?php if ($editDrive): ?>
+<div class="card">
+    <h2>Edit drive</h2>
     <form method="post">
         <input type="hidden" name="action" value="save">
-        <input type="hidden" name="id" value="<?= e((string)($editDrive['id'] ?? 0)) ?>">
+        <input type="hidden" name="id" value="<?= e((string)$editDrive['id']) ?>">
         <div class="form-grid">
-            <label>Friendly name <input type="text" name="friendly_name" required value="<?= e($editDrive['friendly_name'] ?? '') ?>"></label>
-            <label>Serial number <input type="text" name="serial_number" required value="<?= e($editDrive['serial_number'] ?? '') ?>"></label>
-            <label>Volume label <input type="text" name="volume_label" value="<?= e($editDrive['volume_label'] ?? '') ?>"></label>
-            <label>Filesystem <input type="text" name="filesystem" value="<?= e($editDrive['filesystem'] ?? '') ?>"></label>
-            <label class="wide">Mount path <input type="text" name="mount_path" value="<?= e($editDrive['mount_path'] ?? '') ?>"></label>
-            <label>Total bytes <input type="number" name="total_bytes" min="0" value="<?= e((string)($editDrive['total_bytes'] ?? 0)) ?>"></label>
-            <label>Free bytes <input type="number" name="free_bytes" min="0" value="<?= e((string)($editDrive['free_bytes'] ?? 0)) ?>"></label>
-            <label>Used bytes <input type="number" name="used_bytes" min="0" value="<?= e((string)($editDrive['used_bytes'] ?? 0)) ?>"></label>
-            <label>Active <input type="checkbox" name="is_active" value="1" <?= !isset($editDrive) || (int)($editDrive['is_active'] ?? 1) === 1 ? 'checked' : '' ?>></label>
+            <label>Friendly name <input type="text" name="friendly_name" required value="<?= e($editDrive['friendly_name']) ?>"></label>
+            <label>Active <input type="checkbox" name="is_active" value="1" <?= (int)$editDrive['is_active'] === 1 ? 'checked' : '' ?>></label>
+            <label>Serial number <input type="text" readonly value="<?= e($editDrive['serial_number']) ?>"></label>
+            <label>Mount path <input type="text" readonly value="<?= e($editDrive['mount_path']) ?>"></label>
+            <label>Total size <input type="text" readonly value="<?= e(format_bytes((int)$editDrive['total_bytes'])) ?>"></label>
+            <label>Free space <input type="text" readonly value="<?= e(format_bytes((int)$editDrive['free_bytes'])) ?>"></label>
             <label class="wide">Notes <textarea name="notes" rows="3"><?= e($editDrive['notes'] ?? '') ?></textarea></label>
         </div>
-        <p><button type="submit">Save drive</button></p>
+        <p><button type="submit">Save drive</button> <a class="button" href="drives.php">Cancel</a></p>
     </form>
 </div>
+<?php endif; ?>
 
 <div class="card">
     <h2>Known drives</h2>
