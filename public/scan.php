@@ -42,6 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $mountedDrives = $discovery->discover();
+$mountedGroups = $discovery->groupByPhysicalDisk($mountedDrives);
 $knownDrivesBySerial = [];
 foreach ($driveRepo->all() as $drive) {
     $knownDrivesBySerial[$drive['serial_number']] = $drive;
@@ -59,26 +60,51 @@ render_header('Scan');
 
 <div class="card">
     <h2>Scan connected drive</h2>
-    <p class="muted">Select a mounted drive/path discovered by the system. This queues a background scan job; the browser does not scan the drive directly.</p>
+    <p class="muted">Select a mounted partition/path discovered by the system. Partitions are grouped by physical disk so one USB disk does not appear as unrelated drives.</p>
 
-    <?php if (!$mountedDrives): ?>
+    <?php if (!$mountedGroups): ?>
         <p>No mounted drives were discovered. On Synology, make sure the USB drive is mounted and readable by Web Station.</p>
     <?php else: ?>
         <table>
-            <thead><tr><th>Path</th><th>Detected serial</th><th>Size</th><th>Free</th><th>Known as</th><th>Queue scan</th></tr></thead>
+            <thead><tr><th>Disk</th><th>Partitions / paths</th><th>Total mounted size</th><th>Total mounted free</th><th>Queue scan</th></tr></thead>
             <tbody>
-            <?php foreach ($mountedDrives as $drive): ?>
-                <?php $known = $knownDrivesBySerial[$drive['serial_number']] ?? null; ?>
+            <?php foreach ($mountedGroups as $groupIndex => $group): ?>
+                <?php
+                $firstPartition = $group['partitions'][0] ?? null;
+                $defaultFriendly = $firstPartition['label'] ?? ('drive-' . ($groupIndex + 1));
+                $known = null;
+                foreach ($group['partitions'] as $partition) {
+                    if (isset($knownDrivesBySerial[$partition['serial_number']])) {
+                        $known = $knownDrivesBySerial[$partition['serial_number']];
+                        break;
+                    }
+                }
+                ?>
                 <tr>
-                    <td><?= e($drive['path']) ?></td>
-                    <td><?= e($drive['serial_number']) ?></td>
-                    <td><?= e(format_bytes($drive['total_bytes'])) ?></td>
-                    <td><?= e(format_bytes($drive['free_bytes'])) ?></td>
-                    <td><?= e($known['friendly_name'] ?? '-') ?></td>
                     <td>
-                        <form method="post">
-                            <input type="hidden" name="path" value="<?= e($drive['path']) ?>">
-                            <input type="text" name="friendly_name" required placeholder="Friendly drive name" value="<?= e($known['friendly_name'] ?? $drive['label']) ?>">
+                        <strong><?= e($group['device_name'] ?? $group['disk_key']) ?></strong><br>
+                        <span class="muted"><?= e(trim(($group['vendor'] ?? '') . ' ' . ($group['model'] ?? '')) ?: 'USB disk') ?></span><br>
+                        <span class="muted"><?= e($group['disk_serial'] ? 'Serial: ' . $group['disk_serial'] : 'Serial: not exposed') ?></span>
+                    </td>
+                    <td>
+                        <?php foreach ($group['partitions'] as $index => $partition): ?>
+                            <div class="partition-choice">
+                                <label>
+                                    <input type="radio" name="scan_path_<?= e((string)$groupIndex) ?>" value="<?= e($partition['path']) ?>" <?= $index === 0 ? 'checked' : '' ?> form="scan-form-<?= e((string)$groupIndex) ?>">
+                                    <?= e($partition['path']) ?>
+                                </label><br>
+                                <span class="muted">
+                                    <?= e($partition['partition_device'] ?? '') ?> | <?= e($partition['serial_number']) ?> | <?= e(format_bytes((int)$partition['total_bytes'])) ?> | Free <?= e(format_bytes((int)$partition['free_bytes'])) ?>
+                                </span>
+                            </div>
+                        <?php endforeach; ?>
+                    </td>
+                    <td><?= e(format_bytes((int)$group['total_bytes'])) ?></td>
+                    <td><?= e(format_bytes((int)$group['free_bytes'])) ?></td>
+                    <td>
+                        <form method="post" id="scan-form-<?= e((string)$groupIndex) ?>" onsubmit="this.path.value = document.querySelector('input[name=scan_path_<?= e((string)$groupIndex) ?>]:checked').value;">
+                            <input type="hidden" name="path" value="<?= e($firstPartition['path'] ?? '') ?>">
+                            <input type="text" name="friendly_name" required placeholder="Friendly drive name" value="<?= e($known['friendly_name'] ?? $defaultFriendly) ?>">
                             <button type="submit">Queue scan</button>
                         </form>
                     </td>
