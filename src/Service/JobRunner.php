@@ -60,28 +60,40 @@ final class JobRunner
         }
 
         $this->throwIfCancelled($jobId);
-        $this->jobs->progress($jobId, 0, null, 'Preparing scan: ' . $path);
+        $details = $this->discovery->describePath($path);
+        $usedBytes = max(1, (int)($details['used_bytes'] ?? 0));
+        $this->jobs->progress($jobId, 0, $usedBytes, 'Preparing scan: ' . $path);
 
         if ($serialNumber === null) {
-            $details = $this->discovery->describePath($path);
             $serialNumber = $details['serial_number'];
         }
 
         $scanner = new DriveScanner($this->db, $this->drives);
+        $lastUpdateAt = 0.0;
         $scanRunId = $scanner->scan(
             $path,
             $friendlyName,
             $serialNumber,
-            function (array $stats, string $message) use ($jobId): void {
+            function (array $stats, string $message) use ($jobId, $usedBytes, &$lastUpdateAt): void {
                 $this->throwIfCancelled($jobId);
-                $current = (int)$stats['files'] + (int)$stats['folders'];
-                $this->jobs->progress($jobId, $current, null, $message);
+                $now = microtime(true);
+                if (($now - $lastUpdateAt) < 0.75 && (($stats['files'] + $stats['folders']) % 500) !== 0) {
+                    return;
+                }
+                $lastUpdateAt = $now;
+                $bytes = min((int)$stats['bytes'], $usedBytes);
+                $detail = sprintf('%s | files=%d folders=%d scanned=%s', $message, (int)$stats['files'], (int)$stats['folders'], $this->formatBytes((int)$stats['bytes']));
+                $this->jobs->progress($jobId, $bytes, $usedBytes, $detail);
             },
             fn(): bool => $this->jobs->isCancelRequested($jobId)
         );
 
         $this->throwIfCancelled($jobId);
-        $this->jobs->complete($jobId, ['scan_run_id' => $scanRunId]);
+        $this->jobs->complete($jobId, [
+            'scan_run_id' => $scanRunId,
+            'progress_current' => $usedBytes,
+            'progress_total' => $usedBytes,
+        ]);
     }
 
     private function runRefreshDriveInfo(int $jobId, array $payload): void
@@ -124,7 +136,7 @@ final class JobRunner
         ], false);
 
         $this->jobs->progress($jobId, 1, 1, 'Drive info refreshed');
-        $this->jobs->complete($jobId, ['drive_id' => $driveId, 'path' => $path]);
+        $this->jobs->complete($jobId, ['drive_id' => $driveId, 'path' => $path, 'progress_current' => 1, 'progress_total' => 1]);
     }
 
     private function throwIfCancelled(int $jobId): void
@@ -132,5 +144,17 @@ final class JobRunner
         if ($this->jobs->isCancelRequested($jobId)) {
             throw new \RuntimeException('Job was cancelled.');
         }
+    }
+
+    private function formatBytes(int $bytes): string
+    {
+        $units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+        $value = (float)$bytes;
+        $unit = 0;
+        while ($value >= 1024 && $unit < count($units) - 1) {
+            $value /= 1024;
+            $unit++;
+        }
+        return $unit === 0 ? (string)$bytes . ' B' : number_format($value, 2) . ' ' . $units[$unit];
     }
 }
