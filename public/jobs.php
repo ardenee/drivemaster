@@ -16,8 +16,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $id = (int)($_POST['id'] ?? 0);
 
     if ($id > 0 && $action === 'cancel') {
-        $repo->cancel($id);
-        $message = 'Job cancelled: ' . $id;
+        $repo->requestCancel($id);
+        $message = 'Cancel requested for job: ' . $id;
     }
 
     if ($id > 0 && $action === 'requeue') {
@@ -40,9 +40,9 @@ render_header('Jobs');
 
 <div class="card">
     <h2>Background jobs</h2>
-    <p class="muted">Scans and future move operations run from the CLI worker. Refresh this page to monitor progress.</p>
+    <p class="muted">Scans and future move operations run from the CLI worker. Cancel requests are checked during worker progress updates. Stale running jobs are automatically requeued when the worker starts.</p>
     <table>
-        <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Progress</th><th>Message</th><th>Error</th><th>Created</th><th>Finished</th><th>Actions</th></tr></thead>
+        <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Cancel</th><th>Progress</th><th>Message</th><th>Error</th><th>Heartbeat</th><th>Created</th><th>Finished</th><th>Actions</th></tr></thead>
         <tbody>
         <?php foreach ($jobs as $job): ?>
             <?php
@@ -50,18 +50,21 @@ render_header('Jobs');
             $current = (int)$job['progress_current'];
             $progress = $total && $total > 0 ? $current . ' / ' . $total : (string)$current;
             $status = (string)$job['status'];
+            $cancelRequested = (int)($job['cancel_requested'] ?? 0) === 1;
             ?>
             <tr>
                 <td><?= e((string)$job['id']) ?></td>
                 <td><?= e($job['job_type']) ?></td>
                 <td><?= e($status) ?></td>
+                <td><?= $cancelRequested ? 'Yes' : 'No' ?></td>
                 <td><?= e($progress) ?></td>
                 <td><?= e($job['progress_message']) ?></td>
                 <td><?= e($job['error_message']) ?></td>
+                <td><?= e($job['last_heartbeat_at'] ?? '') ?></td>
                 <td><?= e($job['created_at']) ?></td>
                 <td><?= e($job['finished_at']) ?></td>
                 <td class="actions">
-                    <?php if (in_array($status, ['queued', 'running'], true)): ?>
+                    <?php if (in_array($status, ['queued', 'running'], true) && !$cancelRequested): ?>
                         <form method="post" style="display:inline">
                             <input type="hidden" name="id" value="<?= e((string)$job['id']) ?>">
                             <input type="hidden" name="action" value="cancel">
