@@ -16,7 +16,7 @@ final class DriveScanner
     {
     }
 
-    public function scan(string $rootPath, string $friendlyName, ?string $serialNumber = null): int
+    public function scan(string $rootPath, string $friendlyName, ?string $serialNumber = null, ?callable $progressCallback = null): int
     {
         $rootPath = rtrim($rootPath, DIRECTORY_SEPARATOR);
 
@@ -43,10 +43,12 @@ final class DriveScanner
         $stats = ['files' => 0, 'folders' => 0, 'bytes' => 0];
 
         try {
+            $progressCallback && $progressCallback($stats, 'Marking previous inventory as stale');
             $this->markDriveEntriesMissing($driveId);
-            $this->scanDirectory($driveId, $scanRunId, $rootPath, $stats);
+            $this->scanDirectory($driveId, $scanRunId, $rootPath, $stats, $progressCallback);
             $this->finishScanRun($scanRunId, 'complete', $stats);
             $this->drives->markScanned($driveId);
+            $progressCallback && $progressCallback($stats, 'Scan complete');
         } catch (Throwable $e) {
             $this->failScanRun($scanRunId, $e->getMessage(), $stats);
             throw $e;
@@ -55,7 +57,7 @@ final class DriveScanner
         return $scanRunId;
     }
 
-    private function scanDirectory(int $driveId, int $scanRunId, string $rootPath, array &$stats): void
+    private function scanDirectory(int $driveId, int $scanRunId, string $rootPath, array &$stats, ?callable $progressCallback): void
     {
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($rootPath, RecursiveDirectoryIterator::SKIP_DOTS),
@@ -76,6 +78,11 @@ final class DriveScanner
             }
 
             $this->upsertEntry($driveId, $scanRunId, $fullPath, $relativePath, $item->getFilename(), $item->getPath(), $isDir, $size, $item->getMTime());
+
+            $seen = $stats['files'] + $stats['folders'];
+            if ($progressCallback && $seen % 100 === 0) {
+                $progressCallback($stats, 'Scanning: ' . $relativePath);
+            }
         }
     }
 
