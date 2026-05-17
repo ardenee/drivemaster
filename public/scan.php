@@ -6,11 +6,12 @@ require dirname(__DIR__) . '/src/bootstrap.php';
 require __DIR__ . '/_layout.php';
 
 use DriveMaster\Repository\DriveRepository;
+use DriveMaster\Repository\JobRepository;
 use DriveMaster\Service\DriveDiscovery;
-use DriveMaster\Service\DriveScanner;
 
 $discovery = new DriveDiscovery();
-$repo = new DriveRepository(db());
+$driveRepo = new DriveRepository(db());
+$jobRepo = new JobRepository(db());
 $message = null;
 $error = null;
 
@@ -27,9 +28,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $details = $discovery->describePath($path);
-        $scanner = new DriveScanner(db(), $repo);
-        $scanRunId = $scanner->scan($details['path'], $friendlyName, $details['serial_number']);
-        $message = 'Scan complete. Scan run ID: ' . $scanRunId;
+        $jobId = $jobRepo->create('scan_drive', [
+            'path' => $details['path'],
+            'friendly_name' => $friendlyName,
+            'serial_number' => $details['serial_number'],
+        ]);
+
+        header('Location: jobs.php?created=' . $jobId);
+        exit;
     } catch (Throwable $e) {
         $error = $e->getMessage();
     }
@@ -37,7 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $mountedDrives = $discovery->discover();
 $knownDrivesBySerial = [];
-foreach ($repo->all() as $drive) {
+foreach ($driveRepo->all() as $drive) {
     $knownDrivesBySerial[$drive['serial_number']] = $drive;
 }
 
@@ -53,13 +59,13 @@ render_header('Scan');
 
 <div class="card">
     <h2>Scan connected drive</h2>
-    <p class="muted">Select a mounted drive/path discovered by the system. Drive records are created from scans, not manually.</p>
+    <p class="muted">Select a mounted drive/path discovered by the system. This queues a background scan job; the browser does not scan the drive directly.</p>
 
     <?php if (!$mountedDrives): ?>
         <p>No mounted drives were discovered. On Synology, make sure the USB drive is mounted and readable by Web Station.</p>
     <?php else: ?>
         <table>
-            <thead><tr><th>Path</th><th>Detected serial</th><th>Size</th><th>Free</th><th>Known as</th><th>Scan</th></tr></thead>
+            <thead><tr><th>Path</th><th>Detected serial</th><th>Size</th><th>Free</th><th>Known as</th><th>Queue scan</th></tr></thead>
             <tbody>
             <?php foreach ($mountedDrives as $drive): ?>
                 <?php $known = $knownDrivesBySerial[$drive['serial_number']] ?? null; ?>
@@ -73,7 +79,7 @@ render_header('Scan');
                         <form method="post">
                             <input type="hidden" name="path" value="<?= e($drive['path']) ?>">
                             <input type="text" name="friendly_name" required placeholder="Friendly drive name" value="<?= e($known['friendly_name'] ?? $drive['label']) ?>">
-                            <button type="submit">Scan</button>
+                            <button type="submit">Queue scan</button>
                         </form>
                     </td>
                 </tr>
