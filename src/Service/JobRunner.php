@@ -32,6 +32,7 @@ final class JobRunner
 
             match ($job['job_type']) {
                 'scan_drive' => $this->runScanDrive((int)$job['id'], $payload),
+                'refresh_drive_info' => $this->runRefreshDriveInfo((int)$job['id'], $payload),
                 default => throw new \RuntimeException('Unknown job type: ' . $job['job_type']),
             };
         } catch (Throwable $e) {
@@ -81,6 +82,50 @@ final class JobRunner
 
         $this->throwIfCancelled($jobId);
         $this->jobs->complete($jobId, ['scan_run_id' => $scanRunId]);
+    }
+
+    private function runRefreshDriveInfo(int $jobId, array $payload): void
+    {
+        $driveId = (int)($payload['drive_id'] ?? 0);
+        if ($driveId <= 0) {
+            throw new \RuntimeException('Refresh job is missing drive ID.');
+        }
+
+        $drive = $this->drives->find($driveId);
+        if (!$drive) {
+            throw new \RuntimeException('Drive no longer exists.');
+        }
+
+        $path = (string)($drive['mount_path'] ?? '');
+        if ($path === '' || !is_dir($path)) {
+            throw new \RuntimeException('Drive mount path is not currently available: ' . $path);
+        }
+
+        $this->throwIfCancelled($jobId);
+        $this->jobs->progress($jobId, 0, 1, 'Refreshing drive info: ' . $path);
+
+        $info = $this->discovery->describePath($path);
+        $this->drives->upsert([
+            'friendly_name' => $drive['friendly_name'],
+            'serial_number' => $info['serial_number'],
+            'hardware_serial' => $info['hardware_serial'] ?? null,
+            'filesystem_uuid' => $info['filesystem_uuid'] ?? null,
+            'volume_label' => $info['label'] ?? null,
+            'model' => $info['model'] ?? null,
+            'vendor' => $info['vendor'] ?? null,
+            'filesystem' => $info['filesystem'] ?? null,
+            'mount_path' => $info['path'],
+            'device_name' => $info['device_name'] ?? null,
+            'identity_source' => $info['identity_source'] ?? null,
+            'total_bytes' => (int)$info['total_bytes'],
+            'free_bytes' => (int)$info['free_bytes'],
+            'used_bytes' => (int)$info['used_bytes'],
+            'notes' => $drive['notes'] ?? null,
+            'is_active' => (int)$drive['is_active'],
+        ]);
+
+        $this->jobs->progress($jobId, 1, 1, 'Drive info refreshed');
+        $this->jobs->complete($jobId, ['drive_id' => $driveId, 'path' => $path]);
     }
 
     private function throwIfCancelled(int $jobId): void
