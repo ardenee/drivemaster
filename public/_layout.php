@@ -15,9 +15,11 @@ function render_header(string $title): void
     <header><h1>DriveMaster</h1></header>
     <nav>
         <a href="index.php">Dashboard</a>
+        <a href="scan.php">Scan</a>
         <a href="drives.php">Drives</a>
         <a href="files.php">Files</a>
         <a href="categories.php">Categories</a>
+        <a href="health.php">Health</a>
     </nav>
     <main>
     <?php
