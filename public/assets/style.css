@@ -18,3 +18,13 @@ button, .button { display: inline-block; background: #1f5fa8; color: #fff; borde
 .form-grid .wide { grid-column: 1 / -1; }
 .actions { white-space: nowrap; }
 .muted { color: #6b7785; }
+.explorer-wrap { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 0; padding: 0; overflow: hidden; }
+.explorer-sidebar { background: #f7f9fb; border-right: 1px solid #d9e0e7; padding: 14px; min-height: 520px; }
+.explorer-sidebar h3 { margin-top: 0; font-size: 16px; }
+.tree-drive { padding: 6px 8px; border-radius: 5px; margin-bottom: 3px; }
+.tree-drive.selected { background: #e4edf7; font-weight: bold; }
+.explorer-main { padding: 14px; overflow-x: auto; }
+.breadcrumbs { background: #f7f9fb; border: 1px solid #d9e0e7; border-radius: 5px; padding: 9px 10px; margin-bottom: 12px; }
+.explorer-table th a { color: #222; display: block; }
+.explorer-table td:first-child { min-width: 360px; }
+.explorer-table tr:hover td { background: #f8fbff; }
