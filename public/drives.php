@@ -12,6 +12,7 @@ $repo = new DriveRepository(db());
 $jobRepo = new JobRepository(db());
 $editDrive = null;
 $message = null;
+$formFactors = ['3.5' => '3.5', '2.5' => '2.5', 'M2' => 'M2'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -23,6 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($existing) {
             $repo->updateManual($id, [
                 'friendly_name' => trim($_POST['friendly_name'] ?? ''),
+                'form_factor' => trim($_POST['form_factor'] ?? '3.5'),
                 'notes' => trim($_POST['notes'] ?? ''),
                 'is_active' => $_POST['is_active'] ?? null,
             ]);
@@ -76,6 +78,13 @@ render_header('Drives');
         <input type="hidden" name="id" value="<?= e((string)$editDrive['id']) ?>">
         <div class="form-grid">
             <label>Friendly name <input type="text" name="friendly_name" required value="<?= e($editDrive['friendly_name']) ?>"></label>
+            <label>Form factor
+                <select name="form_factor">
+                    <?php foreach ($formFactors as $value => $label): ?>
+                        <option value="<?= e($value) ?>" <?= (($editDrive['form_factor'] ?? '3.5') === $value) ? 'selected' : '' ?>><?= e($label) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
             <label>Active <input type="checkbox" name="is_active" value="1" <?= (int)$editDrive['is_active'] === 1 ? 'checked' : '' ?>></label>
             <label>Stable identity <input type="text" readonly value="<?= e($editDrive['serial_number']) ?>"></label>
             <label>Identity source <input type="text" readonly value="<?= e($editDrive['identity_source'] ?? '') ?>"></label>
@@ -98,11 +107,12 @@ render_header('Drives');
 <div class="card">
     <h2>Known drives</h2>
     <table>
-        <thead><tr><th>Name</th><th>Stable identity</th><th>Source</th><th>Model</th><th>Device</th><th>Path</th><th>Size</th><th>Free</th><th>Last scanned</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Name</th><th>Form factor</th><th>Stable identity</th><th>Source</th><th>Model</th><th>Device</th><th>Path</th><th>Size</th><th>Free</th><th>Last scanned</th><th>Actions</th></tr></thead>
         <tbody>
         <?php foreach ($drives as $drive): ?>
             <tr>
                 <td><?= e($drive['friendly_name']) ?></td>
+                <td><?= e($drive['form_factor'] ?? '3.5') ?></td>
                 <td><?= e($drive['serial_number']) ?></td>
                 <td><?= e($drive['identity_source'] ?? '') ?></td>
                 <td><?= e(trim(($drive['vendor'] ?? '') . ' ' . ($drive['model'] ?? ''))) ?></td>
