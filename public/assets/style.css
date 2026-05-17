@@ -1,0 +1,20 @@
+body { margin: 0; font-family: Arial, sans-serif; background: #f4f6f8; color: #222; }
+a { color: #1f5fa8; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { background: #1d2733; color: #fff; padding: 14px 22px; }
+header h1 { margin: 0; font-size: 22px; }
+nav { background: #2d3b4d; padding: 8px 22px; }
+nav a { color: #fff; margin-right: 16px; font-weight: bold; }
+main { padding: 22px; }
+.card { background: #fff; border: 1px solid #d9e0e7; border-radius: 8px; padding: 18px; margin-bottom: 18px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+table { width: 100%; border-collapse: collapse; background: #fff; }
+th, td { border-bottom: 1px solid #e2e8ef; padding: 10px; text-align: left; vertical-align: top; }
+th { background: #eef3f8; }
+input, select, textarea, button { font: inherit; padding: 8px; box-sizing: border-box; }
+input[type=text], input[type=number], textarea, select { width: 100%; border: 1px solid #c8d1dc; border-radius: 5px; }
+button, .button { display: inline-block; background: #1f5fa8; color: #fff; border: 0; border-radius: 5px; padding: 8px 12px; cursor: pointer; }
+.button.danger, button.danger { background: #a83232; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.form-grid .wide { grid-column: 1 / -1; }
+.actions { white-space: nowrap; }
+.muted { color: #6b7785; }
