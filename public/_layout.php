@@ -16,6 +16,7 @@ function render_header(string $title): void
     <nav>
         <a href="index.php">Dashboard</a>
         <a href="scan.php">Scan</a>
+        <a href="jobs.php">Jobs</a>
         <a href="drives.php">Drives</a>
         <a href="files.php">Files</a>
         <a href="categories.php">Categories</a>
