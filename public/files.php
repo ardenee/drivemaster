@@ -8,6 +8,9 @@ require __DIR__ . '/_layout.php';
 use DriveMaster\Repository\DriveRepository;
 use DriveMaster\Repository\JobRepository;
 
+const EXPLORER_PAGE_SIZE = 1000;
+const TREE_CHILD_LIMIT = 1000;
+
 $error = null;
 $debug = isset($_GET['debug']);
 
@@ -63,7 +66,7 @@ function fp_highlight(?string $value, array $terms): string
 function fp_folder_children(int $driveId, string $parentPath): array
 {
     $expr = fp_parent_expr();
-    $stmt = db()->prepare("SELECT id, name, relative_path FROM file_entries WHERE drive_id = ? AND is_missing = 0 AND entry_type = 'folder' AND {$expr} = ? ORDER BY name ASC");
+    $stmt = db()->prepare("SELECT id, name, relative_path FROM file_entries WHERE drive_id = ? AND is_missing = 0 AND entry_type = 'folder' AND {$expr} = ? ORDER BY name ASC LIMIT " . TREE_CHILD_LIMIT);
     $stmt->execute([$driveId, $parentPath]);
     return $stmt->fetchAll();
 }
@@ -83,7 +86,7 @@ function fp_render_tree(int $driveId, string $parentPath, string $activePath, in
         $isActive = $folderPath === $activePath;
         $padding = 18 + ($level * 18);
         ?>
-        <div class="tree-folder <?= $isActive ? 'selected selected-row' : '' ?>" style="padding-left: <?= e((string)$padding) ?>px" data-url="<?= e(fp_link(['drive_id' => $driveId, 'path' => $folderPath, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null], true)) ?>">
+        <div class="tree-folder <?= $isActive ? 'selected selected-row' : '' ?>" style="padding-left: <?= e((string)$padding) ?>px" data-url="<?= e(fp_link(['drive_id' => $driveId, 'path' => $folderPath, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null, 'explorer_page' => 1], true)) ?>">
             <span class="tree-toggle"><?= $isOpen ? '▾' : '▸' ?></span><span class="folder-icon">📁</span> <?= e((string)$folder['name']) ?>
         </div>
         <?php
@@ -172,6 +175,8 @@ $driveId = (int)($_GET['drive_id'] ?? ($drives[0]['id'] ?? 0));
 $currentPath = trim((string)($_GET['path'] ?? ''));
 $expandedDriveId = (int)($_GET['expanded_drive_id'] ?? 0);
 $selectedEntryId = (int)($_GET['selected_entry_id'] ?? 0);
+$explorerPage = max(1, (int)($_GET['explorer_page'] ?? 1));
+$explorerOffset = ($explorerPage - 1) * EXPLORER_PAGE_SIZE;
 $sort = (string)($_GET['sort'] ?? 'name');
 $dir = strtolower((string)($_GET['dir'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
 $nextDir = $dir === 'asc' ? 'desc' : 'asc';
@@ -187,14 +192,7 @@ $maxSize = trim((string)($_GET['max_size'] ?? ''));
 $modifiedFrom = trim((string)($_GET['modified_from'] ?? ''));
 $modifiedTo = trim((string)($_GET['modified_to'] ?? ''));
 $resultLimit = (string)($_GET['result_limit'] ?? '1000');
-$resultLimitOptions = [
-    ['100', '100'],
-    ['500', '500'],
-    ['1000', '1000'],
-    ['5000', '5000'],
-    ['10000', '10000'],
-    ['none', 'No limit'],
-];
+$resultLimitOptions = [['100','100'], ['500','500'], ['1000','1000'], ['5000','5000'], ['10000','10000'], ['none','No limit']];
 $validLimits = array_map(static fn(array $row): string => $row[0], $resultLimitOptions);
 if (!in_array($resultLimit, $validLimits, true)) {
     $resultLimit = '1000';
@@ -225,6 +223,8 @@ $breadcrumbs = [];
 $explorerFileCount = 0;
 $explorerFolderCount = 0;
 $explorerTotalSize = 0;
+$explorerTotalItems = 0;
+$explorerDisplayedCount = 0;
 
 try {
     if ($driveId > 0) {
@@ -235,17 +235,24 @@ try {
             'modified' => 'modified_at',
             default => 'name',
         };
-        $stmt = db()->prepare("SELECT * FROM file_entries WHERE drive_id = ? AND is_missing = 0 AND {$expr} = ? ORDER BY CASE WHEN entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, name ASC");
-        $stmt->execute([$driveId, $currentPath]);
+
+        $summaryStmt = db()->prepare("SELECT COUNT(*) AS total_items, SUM(entry_type = 'file') AS file_count, SUM(entry_type = 'folder') AS folder_count, COALESCE(SUM(CASE WHEN entry_type = 'file' THEN size_bytes ELSE 0 END), 0) AS total_size FROM file_entries WHERE drive_id = ? AND is_missing = 0 AND {$expr} = ?");
+        $summaryStmt->execute([$driveId, $currentPath]);
+        $summary = $summaryStmt->fetch() ?: [];
+        $explorerTotalItems = (int)($summary['total_items'] ?? 0);
+        $explorerFileCount = (int)($summary['file_count'] ?? 0);
+        $explorerFolderCount = (int)($summary['folder_count'] ?? 0);
+        $explorerTotalSize = (int)($summary['total_size'] ?? 0);
+
+        $stmt = db()->prepare("SELECT id, relative_path, name, extension, entry_type, size_bytes, modified_at FROM file_entries WHERE drive_id = ? AND is_missing = 0 AND {$expr} = ? ORDER BY CASE WHEN entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, name ASC LIMIT ? OFFSET ?");
+        $stmt->bindValue(1, $driveId, PDO::PARAM_INT);
+        $stmt->bindValue(2, $currentPath);
+        $stmt->bindValue(3, EXPLORER_PAGE_SIZE, PDO::PARAM_INT);
+        $stmt->bindValue(4, $explorerOffset, PDO::PARAM_INT);
+        $stmt->execute();
         $children = $stmt->fetchAll();
-        foreach ($children as $entry) {
-            if ($entry['entry_type'] === 'file') {
-                $explorerFileCount++;
-                $explorerTotalSize += (int)$entry['size_bytes'];
-            } else {
-                $explorerFolderCount++;
-            }
-        }
+        $explorerDisplayedCount = count($children);
+
         $running = '';
         foreach (array_filter(explode('/', $currentPath), static fn(string $v): bool => $v !== '') as $part) {
             $running = $running === '' ? $part : $running . '/' . $part;
@@ -318,8 +325,8 @@ try {
             'modified' => 'f.modified_at',
             default => 'd.friendly_name',
         };
-        $limitSql = $resultLimit === 'none' ? '' : ' LIMIT ' . max(1, min(10000, (int)$resultLimit));
-        $stmt = db()->prepare('SELECT f.*, d.friendly_name FROM file_entries f JOIN drives d ON d.id = f.drive_id WHERE ' . implode(' AND ', $where) . " ORDER BY {$resultSortSql} {$resultDir}, f.relative_path ASC" . $limitSql);
+        $limitSql = $resultLimit === 'none' ? ' LIMIT 50000' : ' LIMIT ' . max(1, min(10000, (int)$resultLimit));
+        $stmt = db()->prepare('SELECT f.id, f.drive_id, f.relative_path, f.name, f.extension, f.entry_type, f.size_bytes, f.modified_at, d.friendly_name FROM file_entries f JOIN drives d ON d.id = f.drive_id WHERE ' . implode(' AND ', $where) . " ORDER BY {$resultSortSql} {$resultDir}, f.relative_path ASC" . $limitSql);
         $stmt->execute($params);
         $searchResults = $stmt->fetchAll();
         foreach ($searchResults as $result) {
@@ -335,10 +342,15 @@ try {
     $error = trim(($error ? $error . ' | ' : '') . 'Search failed: ' . $e->getMessage());
 }
 
+$explorerTotalPages = max(1, (int)ceil($explorerTotalItems / EXPLORER_PAGE_SIZE));
+if ($explorerPage > $explorerTotalPages) {
+    $explorerPage = $explorerTotalPages;
+}
+
 render_header('Files');
 ?>
 <?php if ($error): ?><div class="card"><strong>Error:</strong> <?= e($error) ?></div><?php endif; ?>
-<?php if ($debug): ?><div class="card"><strong>Debug:</strong> drives=<?= e((string)count($drives)) ?>, categories=<?= e((string)count($categories)) ?>, driveId=<?= e((string)$driveId) ?>, children=<?= e((string)count($children)) ?>, hasSearch=<?= $hasSearch ? 'yes' : 'no' ?></div><?php endif; ?>
+<?php if ($debug): ?><div class="card"><strong>Debug:</strong> drives=<?= e((string)count($drives)) ?>, categories=<?= e((string)count($categories)) ?>, driveId=<?= e((string)$driveId) ?>, children=<?= e((string)count($children)) ?>, totalItems=<?= e((string)$explorerTotalItems) ?>, hasSearch=<?= $hasSearch ? 'yes' : 'no' ?></div><?php endif; ?>
 
 <div class="card">
     <h2>File Search</h2>
@@ -364,12 +376,13 @@ render_header('Files');
 <?php if ($hasSearch): ?>
 <div class="card search-results-card">
     <h2>Search results</h2>
+    <?php if ($resultLimit === 'none'): ?><p class="muted">No limit is capped at 50,000 visible rows to prevent the browser/PHP worker from exhausting memory.</p><?php endif; ?>
     <div class="search-results-scroll">
         <table class="search-results-table selectable-table" data-status-target="search-status">
             <thead><tr><?php foreach (['drive' => 'Drive', 'name' => 'Name', 'type' => 'Type', 'path' => 'Path', 'size' => 'Size', 'modified' => 'Modified'] as $key => $label): ?><th><a href="<?= e(fp_link(['result_sort' => $key, 'result_dir' => $resultSort === $key ? $resultNextDir : 'asc'])) ?>"><?= e($label) ?><?= $resultSort === $key ? e($resultDir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th><?php endforeach; ?></tr></thead>
             <tbody>
                 <?php foreach ($searchResults as $result): ?>
-                    <?php $targetUrl = fp_link(['drive_id' => $result['drive_id'], 'path' => fp_parent((string)$result['relative_path']), 'expanded_drive_id' => $result['drive_id'], 'selected_entry_id' => $result['id']], true); ?>
+                    <?php $targetUrl = fp_link(['drive_id' => $result['drive_id'], 'path' => fp_parent((string)$result['relative_path']), 'expanded_drive_id' => $result['drive_id'], 'selected_entry_id' => $result['id'], 'explorer_page' => 1], true); ?>
                     <tr class="search-result-row selectable-row" data-id="<?= e((string)$result['id']) ?>" data-entry-type="<?= e((string)$result['entry_type']) ?>" data-entry-name="<?= e((string)$result['name']) ?>" data-url="<?= e($targetUrl) ?>" data-size="<?= e((string)(int)$result['size_bytes']) ?>" data-is-file="<?= $result['entry_type'] === 'file' ? '1' : '0' ?>">
                         <td><?= e((string)$result['friendly_name']) ?></td><td><?= $result['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= fp_highlight((string)$result['name'], $highlightTerms) ?></td><td><?= e($result['entry_type'] === 'folder' ? 'Folder' : strtoupper((string)$result['extension']) . ' File') ?></td><td><?= fp_highlight((string)$result['relative_path'], $highlightTerms) ?></td><td><?= $result['entry_type'] === 'file' ? e(format_bytes((int)$result['size_bytes'])) : '' ?></td><td><?= e((string)$result['modified_at']) ?></td>
                     </tr>
@@ -390,20 +403,23 @@ render_header('Files');
         <h3>Drives</h3>
         <?php foreach ($drives as $drive): ?>
             <?php $thisDriveId = (int)$drive['id']; $isExpanded = $expandedDriveId === $thisDriveId; ?>
-            <div class="tree-drive <?= $driveId === $thisDriveId ? 'selected' : '' ?>" data-drive-id="<?= e((string)$thisDriveId) ?>" data-url="<?= e(fp_link(['drive_id' => $thisDriveId, 'path' => '', 'expanded_drive_id' => $isExpanded ? 0 : $thisDriveId, 'selected_entry_id' => null], true)) ?>">
+            <div class="tree-drive <?= $driveId === $thisDriveId ? 'selected' : '' ?>" data-drive-id="<?= e((string)$thisDriveId) ?>" data-url="<?= e(fp_link(['drive_id' => $thisDriveId, 'path' => '', 'expanded_drive_id' => $isExpanded ? 0 : $thisDriveId, 'selected_entry_id' => null, 'explorer_page' => 1], true)) ?>">
                 <span class="tree-toggle"><?= $isExpanded ? '▾' : '▸' ?></span> 💽 <?= e((string)$drive['friendly_name']) ?>
             </div>
             <?php if ($isExpanded): ?><?php fp_render_tree($thisDriveId, '', $driveId === $thisDriveId ? $currentPath : ''); ?><?php endif; ?>
         <?php endforeach; ?>
     </div>
     <div class="explorer-main">
-        <div class="breadcrumbs"><a href="<?= e(fp_link(['drive_id' => $driveId, 'path' => '', 'expanded_drive_id' => $driveId], true)) ?>"><?= e((string)($selectedDrive['friendly_name'] ?? 'Drive')) ?></a><?php foreach ($breadcrumbs as $crumb): ?> / <a href="<?= e(fp_link(['drive_id' => $driveId, 'path' => $crumb['path'], 'expanded_drive_id' => $driveId], true)) ?>"><?= e((string)$crumb['name']) ?></a><?php endforeach; ?></div>
+        <div class="breadcrumbs"><a href="<?= e(fp_link(['drive_id' => $driveId, 'path' => '', 'expanded_drive_id' => $driveId, 'explorer_page' => 1], true)) ?>"><?= e((string)($selectedDrive['friendly_name'] ?? 'Drive')) ?></a><?php foreach ($breadcrumbs as $crumb): ?> / <a href="<?= e(fp_link(['drive_id' => $driveId, 'path' => $crumb['path'], 'expanded_drive_id' => $driveId, 'explorer_page' => 1], true)) ?>"><?= e((string)$crumb['name']) ?></a><?php endforeach; ?></div>
+        <?php if ($explorerTotalItems > EXPLORER_PAGE_SIZE): ?>
+            <div class="status-bar">Showing <?= e((string)($explorerOffset + 1)) ?>-<?= e((string)min($explorerOffset + $explorerDisplayedCount, $explorerTotalItems)) ?> of <?= e((string)$explorerTotalItems) ?> items in this folder. <a class="button" href="<?= e(fp_link(['explorer_page' => max(1, $explorerPage - 1)], true)) ?>">Previous</a> <a class="button" href="<?= e(fp_link(['explorer_page' => min($explorerTotalPages, $explorerPage + 1)], true)) ?>">Next</a></div>
+        <?php endif; ?>
         <table class="explorer-table selectable-table" data-status-target="explorer-status">
-            <thead><tr><?php foreach (['name' => 'Name', 'type' => 'Type', 'size' => 'Size', 'modified' => 'Modified'] as $key => $label): ?><th><a href="<?= e(fp_link(['sort' => $key, 'dir' => $sort === $key ? $nextDir : 'asc'], true)) ?>"><?= e($label) ?><?= $sort === $key ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th><?php endforeach; ?></tr></thead>
+            <thead><tr><?php foreach (['name' => 'Name', 'type' => 'Type', 'size' => 'Size', 'modified' => 'Modified'] as $key => $label): ?><th><a href="<?= e(fp_link(['sort' => $key, 'dir' => $sort === $key ? $nextDir : 'asc', 'explorer_page' => 1], true)) ?>"><?= e($label) ?><?= $sort === $key ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th><?php endforeach; ?></tr></thead>
             <tbody>
-                <?php if ($currentPath !== ''): ?><tr class="explorer-row" data-url="<?= e(fp_link(['path' => fp_parent($currentPath), 'expanded_drive_id' => $driveId], true)) ?>"><td>↩ ..</td><td>Folder</td><td></td><td></td></tr><?php endif; ?>
+                <?php if ($currentPath !== ''): ?><tr class="explorer-row" data-url="<?= e(fp_link(['path' => fp_parent($currentPath), 'expanded_drive_id' => $driveId, 'explorer_page' => 1], true)) ?>"><td>↩ ..</td><td>Folder</td><td></td><td></td></tr><?php endif; ?>
                 <?php foreach ($children as $entry): ?>
-                    <?php $entryUrl = $entry['entry_type'] === 'folder' ? fp_link(['path' => $entry['relative_path'], 'expanded_drive_id' => $driveId, 'selected_entry_id' => null], true) : ''; ?>
+                    <?php $entryUrl = $entry['entry_type'] === 'folder' ? fp_link(['path' => $entry['relative_path'], 'expanded_drive_id' => $driveId, 'selected_entry_id' => null, 'explorer_page' => 1], true) : ''; ?>
                     <tr id="entry-<?= e((string)$entry['id']) ?>" class="explorer-row selectable-row <?= $selectedEntryId === (int)$entry['id'] ? 'selected-row target-selected-row' : '' ?>" data-id="<?= e((string)$entry['id']) ?>" data-entry-type="<?= e((string)$entry['entry_type']) ?>" data-entry-name="<?= e((string)$entry['name']) ?>" data-url="<?= e($entryUrl) ?>" data-size="<?= e((string)(int)$entry['size_bytes']) ?>" data-is-file="<?= $entry['entry_type'] === 'file' ? '1' : '0' ?>">
                         <td><?= $entry['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= fp_highlight((string)$entry['name'], $highlightTerms) ?></td><td><?= e($entry['entry_type'] === 'folder' ? 'Folder' : strtoupper((string)$entry['extension']) . ' File') ?></td><td><?= $entry['entry_type'] === 'file' ? e(format_bytes((int)$entry['size_bytes'])) : '' ?></td><td><?= e((string)$entry['modified_at']) ?></td>
                     </tr>
@@ -411,7 +427,10 @@ render_header('Files');
                 <?php if (!$children): ?><tr><td colspan="4">No entries found in this folder.</td></tr><?php endif; ?>
             </tbody>
         </table>
-        <div class="status-bar" id="explorer-status" data-total-count="<?= e((string)count($children)) ?>" data-total-size="<?= e((string)$explorerTotalSize) ?>" data-file-count="<?= e((string)$explorerFileCount) ?>" data-folder-count="<?= e((string)$explorerFolderCount) ?>"></div>
+        <?php if ($explorerTotalItems > EXPLORER_PAGE_SIZE): ?>
+            <div class="status-bar">Page <?= e((string)$explorerPage) ?> of <?= e((string)$explorerTotalPages) ?>. <a class="button" href="<?= e(fp_link(['explorer_page' => max(1, $explorerPage - 1)], true)) ?>">Previous</a> <a class="button" href="<?= e(fp_link(['explorer_page' => min($explorerTotalPages, $explorerPage + 1)], true)) ?>">Next</a></div>
+        <?php endif; ?>
+        <div class="status-bar" id="explorer-status" data-total-count="<?= e((string)$explorerTotalItems) ?>" data-total-size="<?= e((string)$explorerTotalSize) ?>" data-file-count="<?= e((string)$explorerFileCount) ?>" data-folder-count="<?= e((string)$explorerFolderCount) ?>"></div>
     </div>
 </div>
 <?php endif; ?>
@@ -432,7 +451,7 @@ function selectedTypes(row){const table=row.closest('.selectable-table');const s
 document.querySelectorAll('.explorer-row,.search-result-row').forEach(row=>{row.addEventListener('click',e=>{if(row.classList.contains('selectable-row'))selectRow(row,e);});row.addEventListener('dblclick',()=>{if(row.dataset.url)location.href=row.dataset.url;});});
 document.querySelectorAll('.tree-drive,.tree-folder').forEach(row=>{row.addEventListener('click',()=>{document.querySelectorAll('.tree-drive,.tree-folder').forEach(r=>r.classList.remove('selected-row'));row.classList.add('selected-row');});row.addEventListener('dblclick',()=>{if(row.dataset.url)location.href=row.dataset.url;});});
 const menu=document.getElementById('context-menu'),driveMenu=document.getElementById('drive-context-menu'),dialog=document.getElementById('context-dialog');let contextRow=null,contextDriveId=null;
-document.querySelectorAll('.explorer-row.selectable-row').forEach(row=>{row.addEventListener('contextmenu',e=>{e.preventDefault();contextRow=row;selectRow(row,{ctrlKey:true,metaKey:false});const allFolders=selectedTypes(row).every(t=>t==='folder');menu.querySelector('[data-context-action="add_category"]').disabled=!allFolders;menu.querySelector('[data-context-action="remove_category"]').disabled=!allFolders;menu.style.left=e.pageX+'px';menu.style.top=e.pageY+'px';menu.classList.add('visible');driveMenu.classList.remove('visible');});});
+document.querySelectorAll('.explorer-row.selectable-row').forEach(row=>{row.addEventListener('contextmenu',e=>{e.preventDefault();contextRow=row;selectRow(row,{ctrlKey:true,metaKey:false});const allFolders=selectedTypes(row).every(t=>t==='folder');const selectedCount=selectedIds(row).length;menu.querySelector('[data-context-action="add_category"]').disabled=!allFolders;menu.querySelector('[data-context-action="remove_category"]').disabled=!allFolders;menu.querySelector('[data-context-action="rename"]').disabled=selectedCount!==1;menu.style.left=e.pageX+'px';menu.style.top=e.pageY+'px';menu.classList.add('visible');driveMenu.classList.remove('visible');});});
 document.querySelectorAll('.tree-drive').forEach(row=>{row.addEventListener('contextmenu',e=>{e.preventDefault();contextDriveId=row.dataset.driveId;driveMenu.style.left=e.pageX+'px';driveMenu.style.top=e.pageY+'px';driveMenu.classList.add('visible');menu.classList.remove('visible');});});
 document.addEventListener('click',e=>{if(!menu.contains(e.target))menu.classList.remove('visible');if(!driveMenu.contains(e.target))driveMenu.classList.remove('visible');});
 document.querySelectorAll('[data-context-action]').forEach(btn=>{btn.addEventListener('click',()=>{if(!contextRow||btn.disabled)return;const action=btn.dataset.contextAction;document.getElementById('context-selected-ids').value=selectedIds(contextRow).join(',');document.getElementById('context-drive-id').value='';document.getElementById('context-new-name').value=contextRow.dataset.entryName||'';document.getElementById('context-category-area').style.display=['add_category','remove_category'].includes(action)?'block':'none';document.getElementById('context-move-area').style.display=action==='move'?'block':'none';document.getElementById('context-rename-area').style.display=action==='rename'?'block':'none';document.getElementById('context-action-input').value={add_category:'add_category',remove_category:'remove_category',rename:'queue_rename',move:'queue_move',delete:'queue_delete'}[action];document.getElementById('context-dialog-title').textContent=btn.textContent;document.getElementById('context-dialog-note').textContent=action==='delete'?'Confirm delete job for selected item(s). This will queue a background job.':(['move','rename'].includes(action)?'This queues a background operation job. The disk-modifying executor still needs to be completed safely.':'Category changes apply to selected folders only.');menu.classList.remove('visible');dialog.classList.remove('hidden');});});
