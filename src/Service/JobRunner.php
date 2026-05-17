@@ -82,8 +82,7 @@ final class JobRunner
                 }
                 $lastUpdateAt = $now;
                 $bytes = min((int)$stats['bytes'], $usedBytes);
-                $detail = sprintf('%s | files=%d folders=%d scanned=%s', $message, (int)$stats['files'], (int)$stats['folders'], $this->formatBytes((int)$stats['bytes']));
-                $this->jobs->progress($jobId, $bytes, $usedBytes, $detail);
+                $this->jobs->progress($jobId, $bytes, $usedBytes, $message);
             },
             fn(): bool => $this->jobs->isCancelRequested($jobId)
         );
@@ -144,17 +143,5 @@ final class JobRunner
         if ($this->jobs->isCancelRequested($jobId)) {
             throw new \RuntimeException('Job was cancelled.');
         }
-    }
-
-    private function formatBytes(int $bytes): string
-    {
-        $units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-        $value = (float)$bytes;
-        $unit = 0;
-        while ($value >= 1024 && $unit < count($units) - 1) {
-            $value /= 1024;
-            $unit++;
-        }
-        return $unit === 0 ? (string)$bytes . ' B' : number_format($value, 2) . ' ' . $units[$unit];
     }
 }
