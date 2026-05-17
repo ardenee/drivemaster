@@ -26,6 +26,7 @@ $maxSize = trim($_GET['max_size'] ?? '');
 $modifiedFrom = trim($_GET['modified_from'] ?? '');
 $modifiedTo = trim($_GET['modified_to'] ?? '');
 $hasSearch = $searchText !== '' || $extensionFilter !== '' || $folderNameFilter !== '' || $pathFilter !== '' || $minSize !== '' || $maxSize !== '' || $modifiedFrom !== '' || $modifiedTo !== '' || $entryTypeFilter !== 'any' || ($searchMode === 'drive' && $searchDriveId > 0);
+$highlightTerms = array_values(array_filter([$searchText, $extensionFilter, $folderNameFilter, $pathFilter], static fn(string $term): bool => trim($term) !== ''));
 
 $sortSql = match ($sort) {
     'type' => "CASE WHEN entry_type = 'folder' THEN 'Folder' ELSE COALESCE(extension, '') END",
@@ -43,6 +44,11 @@ function files_link(array $params): string
         }
     }
     return 'files.php?' . http_build_query($merged);
+}
+
+function explorer_link(array $params): string
+{
+    return files_link($params) . '#explorer-panel';
 }
 
 function path_parent(string $path): string
@@ -76,6 +82,20 @@ function path_is_on_branch(string $candidate, string $activePath): bool
     return $candidate !== '' && ($candidate === $activePath || str_starts_with($activePath, $candidate . '/'));
 }
 
+function highlight_match(?string $value, array $terms): string
+{
+    $escaped = e($value ?? '');
+    foreach ($terms as $term) {
+        $term = trim($term);
+        if ($term === '') {
+            continue;
+        }
+        $escapedTerm = preg_quote(e($term), '/');
+        $escaped = preg_replace('/(' . $escapedTerm . ')/iu', '<mark>$1</mark>', $escaped) ?? $escaped;
+    }
+    return $escaped;
+}
+
 function render_folder_tree(int $driveId, string $parentPath, string $activePath, int $level = 0): void
 {
     foreach (folder_children($driveId, $parentPath) as $folder) {
@@ -84,7 +104,7 @@ function render_folder_tree(int $driveId, string $parentPath, string $activePath
         $isOpen = path_is_on_branch($folderPath, $activePath);
         $padding = 18 + ($level * 18);
         ?>
-        <div class="tree-folder <?= $isActive ? 'selected selected-row' : '' ?>" style="padding-left: <?= e((string)$padding) ?>px" data-url="<?= e(files_link(['drive_id' => $driveId, 'path' => $folderPath, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null])) ?>">
+        <div class="tree-folder <?= $isActive ? 'selected selected-row' : '' ?>" style="padding-left: <?= e((string)$padding) ?>px" data-url="<?= e(explorer_link(['drive_id' => $driveId, 'path' => $folderPath, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null])) ?>">
             <span class="tree-toggle"><?= $isOpen ? '▾' : '▸' ?></span> <?= e($folder['name']) ?>
         </div>
         <?php
@@ -128,48 +148,39 @@ if ($hasSearch) {
         $where[] = 'f.drive_id = ?';
         $params[] = $searchDriveId;
     }
-
     if ($searchText !== '') {
         $where[] = '(f.name LIKE ? OR f.relative_path LIKE ?)';
         $params[] = '%' . $searchText . '%';
         $params[] = '%' . $searchText . '%';
     }
-
     if ($entryTypeFilter === 'file' || $entryTypeFilter === 'folder') {
         $where[] = 'f.entry_type = ?';
         $params[] = $entryTypeFilter;
     }
-
     if ($extensionFilter !== '') {
         $where[] = 'f.extension = ?';
         $params[] = strtolower(ltrim($extensionFilter, '.'));
     }
-
     if ($folderNameFilter !== '') {
-        $where[] = "f.relative_path LIKE ?";
+        $where[] = 'f.relative_path LIKE ?';
         $params[] = '%' . $folderNameFilter . '%';
     }
-
     if ($pathFilter !== '') {
         $where[] = 'f.relative_path LIKE ?';
         $params[] = '%' . $pathFilter . '%';
     }
-
     if ($minSize !== '') {
         $where[] = 'f.size_bytes >= ?';
         $params[] = (int)$minSize;
     }
-
     if ($maxSize !== '') {
         $where[] = 'f.size_bytes <= ?';
         $params[] = (int)$maxSize;
     }
-
     if ($modifiedFrom !== '') {
         $where[] = 'f.modified_at >= ?';
         $params[] = $modifiedFrom . ' 00:00:00';
     }
-
     if ($modifiedTo !== '') {
         $where[] = 'f.modified_at <= ?';
         $params[] = $modifiedTo . ' 23:59:59';
@@ -185,7 +196,7 @@ render_header('Files');
 <div class="card">
     <h2>File Search</h2>
     <form method="get">
-        <div class="form-grid">
+        <div class="form-grid compact-search">
             <label>Search text <input type="text" name="search" value="<?= e($searchText) ?>" placeholder="file or path text"></label>
             <label>Search scope
                 <select name="search_mode">
@@ -223,15 +234,15 @@ render_header('Files');
 <?php if ($hasSearch): ?>
 <div class="card search-results-card">
     <h2>Search results</h2>
-    <p class="muted">Showing up to 1000 matches. Double-click a result to open its folder in the explorer and select the item.</p>
+    <p class="muted">Showing up to 1000 matches. Highlighted text shows why a result matched. Double-click a result to open/select it below.</p>
     <div class="search-results-scroll">
         <table class="search-results-table">
             <thead><tr><th>Drive</th><th>Name</th><th>Type</th><th>Path</th><th>Size</th><th>Modified</th></tr></thead>
             <tbody>
                 <?php foreach ($searchResults as $result): ?>
                     <?php
-                    $targetPath = $result['entry_type'] === 'folder' ? $result['relative_path'] : path_parent($result['relative_path']);
-                    $targetUrl = files_link([
+                    $targetPath = $result['entry_type'] === 'folder' ? path_parent($result['relative_path']) : path_parent($result['relative_path']);
+                    $targetUrl = explorer_link([
                         'drive_id' => $result['drive_id'],
                         'path' => $targetPath,
                         'expanded_drive_id' => $result['drive_id'],
@@ -239,10 +250,10 @@ render_header('Files');
                     ]);
                     ?>
                     <tr class="search-result-row" data-url="<?= e($targetUrl) ?>">
-                        <td><?= e($result['friendly_name']) ?></td>
-                        <td><?= $result['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= e($result['name']) ?></td>
-                        <td><?= e($result['entry_type'] === 'folder' ? 'Folder' : (($result['extension'] ?? '') !== '' ? strtoupper($result['extension']) . ' File' : 'File')) ?></td>
-                        <td><?= e($result['relative_path']) ?></td>
+                        <td class="wrap-cell"><?= e($result['friendly_name']) ?></td>
+                        <td class="wrap-cell"><?= $result['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= highlight_match($result['name'], $highlightTerms) ?></td>
+                        <td class="wrap-cell"><?= e($result['entry_type'] === 'folder' ? 'Folder' : (($result['extension'] ?? '') !== '' ? strtoupper($result['extension']) . ' File' : 'File')) ?></td>
+                        <td class="wrap-cell path-cell"><?= highlight_match($result['relative_path'], $highlightTerms) ?></td>
                         <td><?= $result['entry_type'] === 'file' ? e(format_bytes((int)$result['size_bytes'])) : '' ?></td>
                         <td><?= e($result['modified_at']) ?></td>
                     </tr>
@@ -256,7 +267,7 @@ render_header('Files');
 </div>
 <?php endif; ?>
 
-<div class="card">
+<div class="card" id="explorer-panel">
     <h2>File Explorer</h2>
     <p class="muted">Left tree is collapsed by default. Single-click selects. Double-click drives/folders/results to open.</p>
 </div>
@@ -272,7 +283,7 @@ render_header('Files');
                 $thisDriveId = (int)$drive['id'];
                 $isSelectedDrive = $driveId === $thisDriveId;
                 $isExpandedDrive = $expandedDriveId === $thisDriveId;
-                $driveUrl = files_link(['drive_id' => $thisDriveId, 'path' => '', 'expanded_drive_id' => $isExpandedDrive ? 0 : $thisDriveId, 'selected_entry_id' => null]);
+                $driveUrl = explorer_link(['drive_id' => $thisDriveId, 'path' => '', 'expanded_drive_id' => $isExpandedDrive ? 0 : $thisDriveId, 'selected_entry_id' => null]);
                 ?>
                 <div class="tree-drive <?= $isSelectedDrive ? 'selected' : '' ?>" data-url="<?= e($driveUrl) ?>">
                     <span class="tree-toggle"><?= $isExpandedDrive ? '▾' : '▸' ?></span> <?= e($drive['friendly_name']) ?>
@@ -284,24 +295,24 @@ render_header('Files');
         </div>
         <div class="explorer-main">
             <div class="breadcrumbs">
-                <a href="<?= e(files_link(['path' => '', 'drive_id' => $driveId, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null])) ?>"><?= e($selectedDrive['friendly_name']) ?></a>
+                <a href="<?= e(explorer_link(['path' => '', 'drive_id' => $driveId, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null])) ?>"><?= e($selectedDrive['friendly_name']) ?></a>
                 <?php foreach ($breadcrumbs as $crumb): ?>
-                    / <a href="<?= e(files_link(['path' => $crumb['path'], 'drive_id' => $driveId, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null])) ?>"><?= e($crumb['name']) ?></a>
+                    / <a href="<?= e(explorer_link(['path' => $crumb['path'], 'drive_id' => $driveId, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null])) ?>"><?= e($crumb['name']) ?></a>
                 <?php endforeach; ?>
             </div>
 
             <table class="explorer-table">
                 <thead>
                     <tr>
-                        <th><a href="<?= e(files_link(['sort' => 'name', 'dir' => $sort === 'name' ? $nextDir : 'asc'])) ?>">Name<?= $sort === 'name' ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th>
-                        <th><a href="<?= e(files_link(['sort' => 'type', 'dir' => $sort === 'type' ? $nextDir : 'asc'])) ?>">Type<?= $sort === 'type' ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th>
-                        <th><a href="<?= e(files_link(['sort' => 'size', 'dir' => $sort === 'size' ? $nextDir : 'asc'])) ?>">Size<?= $sort === 'size' ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th>
-                        <th><a href="<?= e(files_link(['sort' => 'modified', 'dir' => $sort === 'modified' ? $nextDir : 'asc'])) ?>">Modified<?= $sort === 'modified' ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th>
+                        <th><a href="<?= e(explorer_link(['sort' => 'name', 'dir' => $sort === 'name' ? $nextDir : 'asc'])) ?>">Name<?= $sort === 'name' ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th>
+                        <th><a href="<?= e(explorer_link(['sort' => 'type', 'dir' => $sort === 'type' ? $nextDir : 'asc'])) ?>">Type<?= $sort === 'type' ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th>
+                        <th><a href="<?= e(explorer_link(['sort' => 'size', 'dir' => $sort === 'size' ? $nextDir : 'asc'])) ?>">Size<?= $sort === 'size' ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th>
+                        <th><a href="<?= e(explorer_link(['sort' => 'modified', 'dir' => $sort === 'modified' ? $nextDir : 'asc'])) ?>">Modified<?= $sort === 'modified' ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if ($currentPath !== ''): ?>
-                        <tr class="explorer-row" data-url="<?= e(files_link(['path' => path_parent($currentPath), 'expanded_drive_id' => $driveId, 'selected_entry_id' => null])) ?>">
+                        <tr class="explorer-row" data-url="<?= e(explorer_link(['path' => path_parent($currentPath), 'expanded_drive_id' => $driveId, 'selected_entry_id' => null])) ?>">
                             <td>↩ ..</td>
                             <td>Folder</td>
                             <td></td>
@@ -309,10 +320,10 @@ render_header('Files');
                         </tr>
                     <?php endif; ?>
                     <?php foreach ($children as $entry): ?>
-                        <?php $entryUrl = $entry['entry_type'] === 'folder' ? files_link(['path' => $entry['relative_path'], 'expanded_drive_id' => $driveId, 'selected_entry_id' => null]) : ''; ?>
-                        <tr class="explorer-row <?= $selectedEntryId === (int)$entry['id'] ? 'selected-row' : '' ?>" data-url="<?= e($entryUrl) ?>">
-                            <td><?= $entry['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= e($entry['name']) ?></td>
-                            <td><?= e($entry['entry_type'] === 'folder' ? 'Folder' : (($entry['extension'] ?? '') !== '' ? strtoupper($entry['extension']) . ' File' : 'File')) ?></td>
+                        <?php $entryUrl = $entry['entry_type'] === 'folder' ? explorer_link(['path' => $entry['relative_path'], 'expanded_drive_id' => $driveId, 'selected_entry_id' => null]) : ''; ?>
+                        <tr id="entry-<?= e((string)$entry['id']) ?>" class="explorer-row <?= $selectedEntryId === (int)$entry['id'] ? 'selected-row target-selected-row' : '' ?>" data-url="<?= e($entryUrl) ?>">
+                            <td class="wrap-cell"><?= $entry['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= highlight_match($entry['name'], $highlightTerms) ?></td>
+                            <td class="wrap-cell"><?= e($entry['entry_type'] === 'folder' ? 'Folder' : (($entry['extension'] ?? '') !== '' ? strtoupper($entry['extension']) . ' File' : 'File')) ?></td>
                             <td><?= $entry['entry_type'] === 'file' ? e(format_bytes((int)$entry['size_bytes'])) : '' ?></td>
                             <td><?= e($entry['modified_at']) ?></td>
                         </tr>
@@ -338,5 +349,11 @@ document.querySelectorAll('.tree-drive, .tree-folder, .explorer-row, .search-res
         }
     });
 });
+
+const target = document.querySelector('.target-selected-row');
+if (target) {
+    target.classList.add('selected-row');
+    target.scrollIntoView({ block: 'center', inline: 'nearest' });
+}
 </script>
 <?php render_footer(); ?>
