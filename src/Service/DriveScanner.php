@@ -16,7 +16,7 @@ final class DriveScanner
     {
     }
 
-    public function scan(string $rootPath, string $friendlyName, ?string $serialNumber = null, ?callable $progressCallback = null): int
+    public function scan(string $rootPath, string $friendlyName, ?string $serialNumber = null, ?callable $progressCallback = null, ?callable $cancelCallback = null): int
     {
         $rootPath = rtrim($rootPath, DIRECTORY_SEPARATOR);
 
@@ -43,9 +43,11 @@ final class DriveScanner
         $stats = ['files' => 0, 'folders' => 0, 'bytes' => 0];
 
         try {
+            $this->throwIfCancelled($cancelCallback);
             $progressCallback && $progressCallback($stats, 'Marking previous inventory as stale');
             $this->markDriveEntriesMissing($driveId);
-            $this->scanDirectory($driveId, $scanRunId, $rootPath, $stats, $progressCallback);
+            $this->scanDirectory($driveId, $scanRunId, $rootPath, $stats, $progressCallback, $cancelCallback);
+            $this->throwIfCancelled($cancelCallback);
             $this->finishScanRun($scanRunId, 'complete', $stats);
             $this->drives->markScanned($driveId);
             $progressCallback && $progressCallback($stats, 'Scan complete');
@@ -57,7 +59,7 @@ final class DriveScanner
         return $scanRunId;
     }
 
-    private function scanDirectory(int $driveId, int $scanRunId, string $rootPath, array &$stats, ?callable $progressCallback): void
+    private function scanDirectory(int $driveId, int $scanRunId, string $rootPath, array &$stats, ?callable $progressCallback, ?callable $cancelCallback): void
     {
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($rootPath, RecursiveDirectoryIterator::SKIP_DOTS),
@@ -65,6 +67,11 @@ final class DriveScanner
         );
 
         foreach ($iterator as $item) {
+            $seenBefore = $stats['files'] + $stats['folders'];
+            if ($seenBefore % 100 === 0) {
+                $this->throwIfCancelled($cancelCallback);
+            }
+
             $fullPath = $item->getPathname();
             $relativePath = ltrim(substr($fullPath, strlen($rootPath)), DIRECTORY_SEPARATOR);
             $isDir = $item->isDir();
@@ -83,6 +90,13 @@ final class DriveScanner
             if ($progressCallback && $seen % 100 === 0) {
                 $progressCallback($stats, 'Scanning: ' . $relativePath);
             }
+        }
+    }
+
+    private function throwIfCancelled(?callable $cancelCallback): void
+    {
+        if ($cancelCallback && $cancelCallback()) {
+            throw new \RuntimeException('Scan cancelled by user.');
         }
     }
 
