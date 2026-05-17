@@ -24,15 +24,25 @@ final class DriveScanner
             throw new \RuntimeException('Scan path is not a readable directory: ' . $rootPath);
         }
 
-        $totalBytes = @disk_total_space($rootPath) ?: 0;
-        $freeBytes = @disk_free_space($rootPath) ?: 0;
-        $usedBytes = max(0, $totalBytes - $freeBytes);
-        $serialNumber = $serialNumber ?: $this->fallbackSerial($rootPath, $totalBytes);
+        $discovery = new DriveDiscovery();
+        $driveInfo = $discovery->describePath($rootPath);
+        $totalBytes = $driveInfo['total_bytes'];
+        $freeBytes = $driveInfo['free_bytes'];
+        $usedBytes = $driveInfo['used_bytes'];
+        $serialNumber = $serialNumber ?: $driveInfo['serial_number'] ?: $this->fallbackSerial($rootPath, $totalBytes);
 
         $driveId = $this->drives->upsert([
             'friendly_name' => $friendlyName,
             'serial_number' => $serialNumber,
+            'hardware_serial' => $driveInfo['hardware_serial'] ?? null,
+            'filesystem_uuid' => $driveInfo['filesystem_uuid'] ?? null,
+            'volume_label' => $driveInfo['label'] ?? null,
+            'model' => $driveInfo['model'] ?? null,
+            'vendor' => $driveInfo['vendor'] ?? null,
+            'filesystem' => $driveInfo['filesystem'] ?? null,
             'mount_path' => $rootPath,
+            'device_name' => $driveInfo['device_name'] ?? null,
+            'identity_source' => $driveInfo['identity_source'] ?? null,
             'total_bytes' => (int)$totalBytes,
             'free_bytes' => (int)$freeBytes,
             'used_bytes' => (int)$usedBytes,
