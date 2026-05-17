@@ -21,6 +21,7 @@ function render_header(string $title): void
         <a href="drives.php">Drives</a>
         <a href="files.php">Files</a>
         <a href="categories.php">Categories</a>
+        <a href="errors.php">Errors</a>
         <a href="health.php">Health</a>
     </nav>
     <main>
