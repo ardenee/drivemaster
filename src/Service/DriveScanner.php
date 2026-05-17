@@ -6,6 +6,7 @@ namespace DriveMaster\Service;
 
 use DriveMaster\Repository\DriveRepository;
 use PDO;
+use PDOStatement;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use Throwable;
@@ -13,6 +14,11 @@ use Throwable;
 final class DriveScanner
 {
     private const MAX_EXTENSION_LENGTH = 50;
+    private const BATCH_SIZE = 1000;
+    private const CANCEL_CHECK_INTERVAL = 250;
+    private const PROGRESS_INTERVAL_SECONDS = 1.0;
+
+    private ?PDOStatement $entryUpsertStmt = null;
 
     public function __construct(private PDO $db, private DriveRepository $drives)
     {
@@ -53,6 +59,7 @@ final class DriveScanner
 
         $scanRunId = $this->startScanRun($driveId, $rootPath);
         $stats = ['files' => 0, 'folders' => 0, 'bytes' => 0];
+        $this->entryUpsertStmt = $this->prepareEntryUpsertStatement();
 
         try {
             $this->throwIfCancelled($cancelCallback);
@@ -64,8 +71,11 @@ final class DriveScanner
             $this->drives->markScanned($driveId);
             $progressCallback && $progressCallback($stats, 'Scan complete');
         } catch (Throwable $e) {
+            $this->rollbackOpenTransaction();
             $this->failScanRun($scanRunId, $e->getMessage(), $stats);
             throw $e;
+        } finally {
+            $this->entryUpsertStmt = null;
         }
 
         return $scanRunId;
@@ -78,9 +88,13 @@ final class DriveScanner
             RecursiveIteratorIterator::SELF_FIRST
         );
 
+        $pendingRows = 0;
+        $lastProgressAt = microtime(true);
+        $this->beginBatch();
+
         foreach ($iterator as $item) {
             $seenBefore = $stats['files'] + $stats['folders'];
-            if ($seenBefore % 100 === 0) {
+            if ($seenBefore % self::CANCEL_CHECK_INTERVAL === 0) {
                 $this->throwIfCancelled($cancelCallback);
             }
 
@@ -97,11 +111,25 @@ final class DriveScanner
             }
 
             $this->upsertEntry($driveId, $scanRunId, $fullPath, $relativePath, $item->getFilename(), $item->getPath(), $isDir, $size, $item->getMTime());
+            $pendingRows++;
 
-            $seen = $stats['files'] + $stats['folders'];
-            if ($progressCallback && $seen % 100 === 0) {
-                $progressCallback($stats, 'Scanning: ' . $relativePath);
+            if ($pendingRows >= self::BATCH_SIZE) {
+                $this->commitBatch();
+                $pendingRows = 0;
+                $this->beginBatch();
+                $this->throwIfCancelled($cancelCallback);
             }
+
+            if ($progressCallback && (microtime(true) - $lastProgressAt) >= self::PROGRESS_INTERVAL_SECONDS) {
+                $progressCallback($stats, 'Scanning: ' . $relativePath);
+                $lastProgressAt = microtime(true);
+            }
+        }
+
+        $this->commitBatch();
+
+        if ($progressCallback) {
+            $progressCallback($stats, 'Scan write complete');
         }
     }
 
@@ -112,17 +140,42 @@ final class DriveScanner
         }
     }
 
+    private function prepareEntryUpsertStatement(): PDOStatement
+    {
+        $sql = 'INSERT INTO file_entries (drive_id, scan_run_id, parent_path, full_path, relative_path, name, extension, entry_type, size_bytes, modified_at, is_missing, last_seen_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NOW())
+                ON DUPLICATE KEY UPDATE scan_run_id = VALUES(scan_run_id), parent_path = VALUES(parent_path), full_path = VALUES(full_path), name = VALUES(name), extension = VALUES(extension), entry_type = VALUES(entry_type), size_bytes = VALUES(size_bytes), modified_at = VALUES(modified_at), is_missing = 0, last_seen_at = NOW()';
+        return $this->db->prepare($sql);
+    }
+
     private function upsertEntry(int $driveId, int $scanRunId, string $fullPath, string $relativePath, string $name, string $parentPath, bool $isDir, int $size, int $modifiedTime): void
     {
         $extension = $this->safeExtension($isDir, $name);
         $entryType = $isDir ? 'folder' : 'file';
         $modifiedAt = date('Y-m-d H:i:s', $modifiedTime);
-
-        $sql = 'INSERT INTO file_entries (drive_id, scan_run_id, parent_path, full_path, relative_path, name, extension, entry_type, size_bytes, modified_at, is_missing, last_seen_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NOW())
-                ON DUPLICATE KEY UPDATE scan_run_id = VALUES(scan_run_id), parent_path = VALUES(parent_path), full_path = VALUES(full_path), name = VALUES(name), extension = VALUES(extension), entry_type = VALUES(entry_type), size_bytes = VALUES(size_bytes), modified_at = VALUES(modified_at), is_missing = 0, last_seen_at = NOW()';
-        $stmt = $this->db->prepare($sql);
+        $stmt = $this->entryUpsertStmt ?? $this->prepareEntryUpsertStatement();
         $stmt->execute([$driveId, $scanRunId, $parentPath, $fullPath, $relativePath, $name, $extension, $entryType, $size, $modifiedAt]);
+    }
+
+    private function beginBatch(): void
+    {
+        if (!$this->db->inTransaction()) {
+            $this->db->beginTransaction();
+        }
+    }
+
+    private function commitBatch(): void
+    {
+        if ($this->db->inTransaction()) {
+            $this->db->commit();
+        }
+    }
+
+    private function rollbackOpenTransaction(): void
+    {
+        if ($this->db->inTransaction()) {
+            $this->db->rollBack();
+        }
     }
 
     private function safeExtension(bool $isDir, string $name): ?string
