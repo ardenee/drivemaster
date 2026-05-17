@@ -39,6 +39,33 @@ final class DriveDiscovery
         return array_map(fn(string $path): array => $this->describePath($path), $paths);
     }
 
+    public function groupByPhysicalDisk(array $mountedPaths): array
+    {
+        $groups = [];
+
+        foreach ($mountedPaths as $pathInfo) {
+            $key = (string)($pathInfo['disk_key'] ?? $pathInfo['device_name'] ?? $pathInfo['serial_number'] ?? $pathInfo['path']);
+            if (!isset($groups[$key])) {
+                $groups[$key] = [
+                    'disk_key' => $key,
+                    'device_name' => $pathInfo['device_name'] ?? null,
+                    'disk_serial' => $pathInfo['hardware_serial'] ?? null,
+                    'model' => $pathInfo['model'] ?? null,
+                    'vendor' => $pathInfo['vendor'] ?? null,
+                    'partitions' => [],
+                    'total_bytes' => 0,
+                    'free_bytes' => 0,
+                ];
+            }
+
+            $groups[$key]['partitions'][] = $pathInfo;
+            $groups[$key]['total_bytes'] += (int)($pathInfo['total_bytes'] ?? 0);
+            $groups[$key]['free_bytes'] += (int)($pathInfo['free_bytes'] ?? 0);
+        }
+
+        return array_values($groups);
+    }
+
     public function describePath(string $path): array
     {
         $path = rtrim($path, DIRECTORY_SEPARATOR);
@@ -70,6 +97,9 @@ final class DriveDiscovery
             'vendor' => $hardware['vendor'] ?? null,
             'filesystem' => $mountInfo['filesystem'] ?? null,
             'device_name' => $baseDevice ?: null,
+            'partition_device' => $device,
+            'mount_point' => $mountInfo['mount_point'] ?? null,
+            'disk_key' => $this->diskKey($baseDevice, $hardwareSerial),
             'identity_source' => $this->identitySource($hardwareSerial, $filesystemUuid),
         ];
     }
@@ -136,6 +166,17 @@ final class DriveDiscovery
         return 'fallback_path_size';
     }
 
+    private function diskKey(string $baseDevice, ?string $hardwareSerial): string
+    {
+        if ($hardwareSerial !== null && $hardwareSerial !== '') {
+            return 'hw-' . $hardwareSerial;
+        }
+        if ($baseDevice !== '') {
+            return 'dev-' . $baseDevice;
+        }
+        return 'unknown';
+    }
+
     private function readLinuxBlockHardware(string $baseDevice): array
     {
         $basePath = '/sys/block/' . $baseDevice . '/device';
@@ -143,15 +184,27 @@ final class DriveDiscovery
 
         foreach (['serial', 'model', 'vendor'] as $field) {
             $file = $basePath . '/' . $field;
-            if (is_readable($file)) {
-                $value = trim((string)file_get_contents($file));
-                if ($value !== '' && !preg_match('/^0+$/', $value)) {
-                    $data[$field] = $value;
-                }
+            $value = $this->readTrimmedFile($file);
+            if ($value !== null && $value !== '' && !preg_match('/^0+$/', $value)) {
+                $data[$field] = $value;
             }
         }
 
         return $data;
+    }
+
+    private function readTrimmedFile(string $file): ?string
+    {
+        if (!is_file($file) || !is_readable($file)) {
+            return null;
+        }
+
+        $value = @file_get_contents($file);
+        if ($value === false) {
+            return null;
+        }
+
+        return trim((string)$value);
     }
 
     private function detectFilesystemUuid(string $device): ?string
