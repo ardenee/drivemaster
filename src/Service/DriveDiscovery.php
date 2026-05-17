@@ -49,6 +49,13 @@ final class DriveDiscovery
         $totalBytes = @disk_total_space($path) ?: 0;
         $freeBytes = @disk_free_space($path) ?: 0;
         $usedBytes = max(0, $totalBytes - $freeBytes);
+        $mountInfo = $this->findMountInfo($path);
+        $device = $mountInfo['device'] ?? null;
+        $baseDevice = $device ? $this->baseDeviceName($device) : '';
+        $hardware = $baseDevice !== '' ? $this->readLinuxBlockHardware($baseDevice) : [];
+        $filesystemUuid = $device ? $this->detectFilesystemUuid($device) : null;
+        $hardwareSerial = $hardware['serial'] ?? null;
+        $serialNumber = $this->buildStableIdentity($path, (int)$totalBytes, $hardwareSerial, $filesystemUuid);
 
         return [
             'path' => $path,
@@ -56,7 +63,14 @@ final class DriveDiscovery
             'total_bytes' => (int)$totalBytes,
             'free_bytes' => (int)$freeBytes,
             'used_bytes' => (int)$usedBytes,
-            'serial_number' => $this->detectSerial($path, (int)$totalBytes),
+            'serial_number' => $serialNumber,
+            'hardware_serial' => $hardwareSerial,
+            'filesystem_uuid' => $filesystemUuid,
+            'model' => $hardware['model'] ?? null,
+            'vendor' => $hardware['vendor'] ?? null,
+            'filesystem' => $mountInfo['filesystem'] ?? null,
+            'device_name' => $baseDevice ?: null,
+            'identity_source' => $this->identitySource($hardwareSerial, $filesystemUuid),
         ];
     }
 
@@ -75,8 +89,10 @@ final class DriveDiscovery
             return true;
         }
 
-        $device = $mountInfo['device'];
-        $baseDevice = $this->baseDeviceName($device);
+        $baseDevice = $this->baseDeviceName($mountInfo['device']);
+        if ($baseDevice === '') {
+            return true;
+        }
 
         if (in_array($baseDevice, ['md', 'md0', 'md1', 'md2', 'synoboot', 'loop', 'zram'], true)) {
             return false;
@@ -89,50 +105,77 @@ final class DriveDiscovery
         return true;
     }
 
-    private function detectSerial(string $path, int $totalBytes): string
+    private function buildStableIdentity(string $path, int $totalBytes, ?string $hardwareSerial, ?string $filesystemUuid): string
     {
-        $serial = $this->detectSynologySerial($path);
+        if ($hardwareSerial !== null && $hardwareSerial !== '') {
+            return 'hw-' . $hardwareSerial;
+        }
 
-        if ($serial !== null) {
-            return $serial;
+        if ($filesystemUuid !== null && $filesystemUuid !== '') {
+            return 'fs-' . $filesystemUuid;
         }
 
         if (PHP_OS_FAMILY === 'Windows') {
-            $serial = $this->detectWindowsVolumeSerial($path);
-            if ($serial !== null) {
-                return $serial;
+            $volumeSerial = $this->detectWindowsVolumeSerial($path);
+            if ($volumeSerial !== null) {
+                return 'winvol-' . $volumeSerial;
             }
         }
 
         return 'fallback-' . sha1(strtolower($path) . '|' . (string)$totalBytes);
     }
 
-    private function detectSynologySerial(string $path): ?string
+    private function identitySource(?string $hardwareSerial, ?string $filesystemUuid): string
     {
-        $mountInfo = $this->findMountInfo($path);
-        if (!$mountInfo) {
-            return null;
+        if ($hardwareSerial !== null && $hardwareSerial !== '') {
+            return 'hardware_serial';
+        }
+        if ($filesystemUuid !== null && $filesystemUuid !== '') {
+            return 'filesystem_uuid';
+        }
+        return 'fallback_path_size';
+    }
+
+    private function readLinuxBlockHardware(string $baseDevice): array
+    {
+        $basePath = '/sys/block/' . $baseDevice . '/device';
+        $data = [];
+
+        foreach (['serial', 'model', 'vendor'] as $field) {
+            $file = $basePath . '/' . $field;
+            if (is_readable($file)) {
+                $value = trim((string)file_get_contents($file));
+                if ($value !== '' && !preg_match('/^0+$/', $value)) {
+                    $data[$field] = $value;
+                }
+            }
         }
 
-        $device = $mountInfo['device'];
+        return $data;
+    }
+
+    private function detectFilesystemUuid(string $device): ?string
+    {
         if (!str_starts_with($device, '/dev/')) {
             return null;
         }
 
-        $baseDevice = $this->baseDeviceName($device);
-        if ($baseDevice === '' || str_starts_with($baseDevice, 'md') || str_starts_with($baseDevice, 'loop') || str_starts_with($baseDevice, 'zram')) {
-            return null;
-        }
-
-        $serialFile = '/sys/block/' . $baseDevice . '/device/serial';
-        if (is_readable($serialFile)) {
-            $serial = trim((string)file_get_contents($serialFile));
-            if ($serial !== '') {
-                return $serial;
+        $byUuid = glob('/dev/disk/by-uuid/*') ?: [];
+        foreach ($byUuid as $uuidPath) {
+            $target = realpath($uuidPath);
+            if ($target === $device) {
+                return basename($uuidPath);
             }
         }
 
-        return 'device-' . $baseDevice;
+        $command = 'blkid -s UUID -o value ' . escapeshellarg($device) . ' 2>/dev/null';
+        $output = [];
+        @exec($command, $output, $code);
+        if ($code === 0 && isset($output[0]) && trim($output[0]) !== '') {
+            return trim($output[0]);
+        }
+
+        return null;
     }
 
     private function findMountInfo(string $path): ?array
