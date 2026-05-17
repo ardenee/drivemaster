@@ -38,25 +38,7 @@ final class DriveRepository
         $existing = $this->findBySerial($data['serial_number']);
 
         if ($existing) {
-            $stmt = $this->db->prepare('UPDATE drives SET friendly_name = ?, hardware_serial = ?, filesystem_uuid = ?, volume_label = ?, model = ?, vendor = ?, filesystem = ?, mount_path = ?, device_name = ?, identity_source = ?, total_bytes = ?, free_bytes = ?, used_bytes = ?, notes = ?, is_active = ?, last_seen_at = NOW() WHERE id = ?');
-            $stmt->execute([
-                $data['friendly_name'],
-                $data['hardware_serial'] ?? null,
-                $data['filesystem_uuid'] ?? null,
-                $data['volume_label'] ?? null,
-                $data['model'] ?? null,
-                $data['vendor'] ?? null,
-                $data['filesystem'] ?? null,
-                $data['mount_path'] ?? null,
-                $data['device_name'] ?? null,
-                $data['identity_source'] ?? null,
-                $data['total_bytes'] ?? 0,
-                $data['free_bytes'] ?? 0,
-                $data['used_bytes'] ?? 0,
-                $data['notes'] ?? $existing['notes'] ?? null,
-                $data['is_active'] ?? 1,
-                $existing['id'],
-            ]);
+            $this->updateDiscoveredInfo((int)$existing['id'], $data, true);
             return (int)$existing['id'];
         }
 
@@ -81,6 +63,43 @@ final class DriveRepository
         ]);
 
         return (int)$this->db->lastInsertId();
+    }
+
+    public function updateDiscoveredInfo(int $id, array $data, bool $allowFriendlyNameUpdate = false): void
+    {
+        $existing = $this->find($id);
+        if (!$existing) {
+            throw new \RuntimeException('Drive not found.');
+        }
+
+        $newSerial = (string)($data['serial_number'] ?? $existing['serial_number']);
+        $conflict = $this->findBySerial($newSerial);
+        if ($conflict && (int)$conflict['id'] !== $id) {
+            throw new \RuntimeException('Detected drive identity already belongs to another drive: ' . $newSerial);
+        }
+
+        $friendlyName = $allowFriendlyNameUpdate ? (string)($data['friendly_name'] ?? $existing['friendly_name']) : (string)$existing['friendly_name'];
+
+        $stmt = $this->db->prepare('UPDATE drives SET friendly_name = ?, serial_number = ?, hardware_serial = ?, filesystem_uuid = ?, volume_label = ?, model = ?, vendor = ?, filesystem = ?, mount_path = ?, device_name = ?, identity_source = ?, total_bytes = ?, free_bytes = ?, used_bytes = ?, notes = ?, is_active = ?, last_seen_at = NOW() WHERE id = ?');
+        $stmt->execute([
+            $friendlyName,
+            $newSerial,
+            $data['hardware_serial'] ?? null,
+            $data['filesystem_uuid'] ?? null,
+            $data['volume_label'] ?? null,
+            $data['model'] ?? null,
+            $data['vendor'] ?? null,
+            $data['filesystem'] ?? null,
+            $data['mount_path'] ?? null,
+            $data['device_name'] ?? null,
+            $data['identity_source'] ?? null,
+            $data['total_bytes'] ?? 0,
+            $data['free_bytes'] ?? 0,
+            $data['used_bytes'] ?? 0,
+            $data['notes'] ?? $existing['notes'] ?? null,
+            $data['is_active'] ?? $existing['is_active'] ?? 1,
+            $id,
+        ]);
     }
 
     public function updateManual(int $id, array $data): void
