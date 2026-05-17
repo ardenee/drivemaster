@@ -47,7 +47,7 @@ final class JobRepository
             return null;
         }
 
-        $update = $this->db->prepare("UPDATE jobs SET status = 'running', locked_at = NOW(), locked_by = ?, started_at = COALESCE(started_at, NOW()), progress_message = 'Starting' WHERE id = ?");
+        $update = $this->db->prepare("UPDATE jobs SET status = 'running', locked_at = NOW(), locked_by = ?, started_at = NOW(), finished_at = NULL, error_message = NULL, progress_message = 'Starting' WHERE id = ?");
         $update->execute([$workerId, $job['id']]);
 
         $this->db->commit();
@@ -57,7 +57,7 @@ final class JobRepository
 
     public function progress(int $id, int $current, ?int $total, string $message): void
     {
-        $stmt = $this->db->prepare('UPDATE jobs SET progress_current = ?, progress_total = ?, progress_message = ? WHERE id = ?');
+        $stmt = $this->db->prepare('UPDATE jobs SET progress_current = ?, progress_total = ?, progress_message = ? WHERE id = ? AND status = "running"');
         $stmt->execute([$current, $total, $message, $id]);
     }
 
@@ -69,7 +69,26 @@ final class JobRepository
 
     public function fail(int $id, string $message): void
     {
-        $stmt = $this->db->prepare("UPDATE jobs SET status = 'failed', error_message = ?, progress_message = 'Failed', finished_at = NOW() WHERE id = ?");
+        $stmt = $this->db->prepare("UPDATE jobs SET status = 'failed', error_message = ?, progress_message = 'Failed', finished_at = NOW() WHERE id = ? AND status <> 'cancelled'");
         $stmt->execute([$message, $id]);
+    }
+
+    public function cancel(int $id): void
+    {
+        $stmt = $this->db->prepare("UPDATE jobs SET status = 'cancelled', progress_message = 'Cancelled', finished_at = COALESCE(finished_at, NOW()) WHERE id = ? AND status IN ('queued','running')");
+        $stmt->execute([$id]);
+    }
+
+    public function requeue(int $id): void
+    {
+        $stmt = $this->db->prepare("UPDATE jobs SET status = 'queued', result_json = NULL, progress_current = 0, progress_total = NULL, progress_message = 'Queued', error_message = NULL, locked_at = NULL, locked_by = NULL, started_at = NULL, finished_at = NULL WHERE id = ? AND status IN ('failed','cancelled','complete','running')");
+        $stmt->execute([$id]);
+    }
+
+    public function isCancelled(int $id): bool
+    {
+        $stmt = $this->db->prepare("SELECT status FROM jobs WHERE id = ?");
+        $stmt->execute([$id]);
+        return $stmt->fetchColumn() === 'cancelled';
     }
 }
