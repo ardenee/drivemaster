@@ -56,5 +56,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .context-dialog.hidden { display: none; }
 .context-dialog-card { width: min(520px, calc(100vw - 40px)); background: #fff; border-radius: 8px; border: 1px solid #d9e0e7; box-shadow: 0 12px 30px rgba(0,0,0,0.25); padding: 18px; }
 .context-dialog-card h3 { margin-top: 0; }
+.jobs-table th:nth-child(1), .jobs-table td:nth-child(1) { width: 4%; }
+.jobs-table th:nth-child(2), .jobs-table td:nth-child(2) { width: 10%; }
+.jobs-table th:nth-child(3), .jobs-table td:nth-child(3) { width: 8%; }
+.jobs-table th:nth-child(4), .jobs-table td:nth-child(4) { width: 6%; }
+.jobs-table th:nth-child(5), .jobs-table td:nth-child(5) { width: 18%; }
+.job-progress-wrap { min-width: 160px; }
+.job-progress-bar { width: 100%; height: 16px; background: #dbe4ee; border: 1px solid #b9c7d6; border-radius: 999px; overflow: hidden; }
+.job-progress-fill { height: 100%; background: #1f5fa8; transition: width 0.25s ease; }
+.job-progress-text { margin-top: 4px; font-size: 12px; color: #35465a; }
 mark { background: #fff2a8; padding: 0 2px; border-radius: 2px; }
 @media (max-width: 1100px) { .form-grid.compact-search { grid-template-columns: repeat(2, minmax(0, 1fr)); } .explorer-wrap { grid-template-columns: 220px minmax(0, 1fr); } }
