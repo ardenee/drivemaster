@@ -19,10 +19,8 @@ final class DriveDiscovery
             }
         } else {
             $candidates = [
-                '/volumeUSB*',
                 '/volumeUSB*/usbshare*',
                 '/volume*/usbshare*',
-                '/volume*/@usb*',
                 '/mnt/*',
                 '/media/*',
                 '/run/media/*/*',
@@ -35,7 +33,7 @@ final class DriveDiscovery
             }
         }
 
-        $paths = array_values(array_unique(array_filter($paths, static fn(string $path): bool => is_dir($path) && is_readable($path))));
+        $paths = array_values(array_unique(array_filter($paths, fn(string $path): bool => $this->isUsableScanPath($path))));
         sort($paths, SORT_NATURAL | SORT_FLAG_CASE);
 
         return array_map(fn(string $path): array => $this->describePath($path), $paths);
@@ -62,6 +60,35 @@ final class DriveDiscovery
         ];
     }
 
+    private function isUsableScanPath(string $path): bool
+    {
+        if (!is_dir($path) || !is_readable($path)) {
+            return false;
+        }
+
+        if (preg_match('#^/volumeUSB\d+$#', $path)) {
+            return false;
+        }
+
+        $mountInfo = $this->findMountInfo($path);
+        if (!$mountInfo) {
+            return true;
+        }
+
+        $device = $mountInfo['device'];
+        $baseDevice = $this->baseDeviceName($device);
+
+        if (in_array($baseDevice, ['md', 'md0', 'md1', 'md2', 'synoboot', 'loop', 'zram'], true)) {
+            return false;
+        }
+
+        if (str_starts_with($baseDevice, 'md') || str_starts_with($baseDevice, 'loop') || str_starts_with($baseDevice, 'zram')) {
+            return false;
+        }
+
+        return true;
+    }
+
     private function detectSerial(string $path, int $totalBytes): string
     {
         $serial = $this->detectSynologySerial($path);
@@ -82,38 +109,22 @@ final class DriveDiscovery
 
     private function detectSynologySerial(string $path): ?string
     {
-        if (!is_readable('/proc/mounts')) {
+        $mountInfo = $this->findMountInfo($path);
+        if (!$mountInfo) {
             return null;
         }
 
-        $realPath = realpath($path) ?: $path;
-        $mounts = file('/proc/mounts', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
-        $bestDevice = null;
-        $bestMount = '';
-
-        foreach ($mounts as $line) {
-            $parts = preg_split('/\s+/', $line);
-            if (!$parts || count($parts) < 2) {
-                continue;
-            }
-
-            $device = str_replace('\\040', ' ', $parts[0]);
-            $mountPoint = str_replace('\\040', ' ', $parts[1]);
-
-            if (str_starts_with($realPath, $mountPoint) && strlen($mountPoint) > strlen($bestMount)) {
-                $bestMount = $mountPoint;
-                $bestDevice = $device;
-            }
-        }
-
-        if (!$bestDevice || !str_starts_with($bestDevice, '/dev/')) {
+        $device = $mountInfo['device'];
+        if (!str_starts_with($device, '/dev/')) {
             return null;
         }
 
-        $deviceName = basename($bestDevice);
-        $baseDevice = preg_replace('/p?\d+$/', '', $deviceName) ?: $deviceName;
+        $baseDevice = $this->baseDeviceName($device);
+        if ($baseDevice === '' || str_starts_with($baseDevice, 'md') || str_starts_with($baseDevice, 'loop') || str_starts_with($baseDevice, 'zram')) {
+            return null;
+        }
+
         $serialFile = '/sys/block/' . $baseDevice . '/device/serial';
-
         if (is_readable($serialFile)) {
             $serial = trim((string)file_get_contents($serialFile));
             if ($serial !== '') {
@@ -122,6 +133,49 @@ final class DriveDiscovery
         }
 
         return 'device-' . $baseDevice;
+    }
+
+    private function findMountInfo(string $path): ?array
+    {
+        if (!is_readable('/proc/mounts')) {
+            return null;
+        }
+
+        $realPath = realpath($path) ?: $path;
+        $mounts = file('/proc/mounts', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+        $best = null;
+        $bestLength = -1;
+
+        foreach ($mounts as $line) {
+            $parts = preg_split('/\s+/', $line);
+            if (!$parts || count($parts) < 3) {
+                continue;
+            }
+
+            $device = str_replace('\\040', ' ', $parts[0]);
+            $mountPoint = str_replace('\\040', ' ', $parts[1]);
+            $filesystem = $parts[2];
+
+            if ($realPath === $mountPoint || str_starts_with($realPath, rtrim($mountPoint, '/') . '/')) {
+                $length = strlen($mountPoint);
+                if ($length > $bestLength) {
+                    $bestLength = $length;
+                    $best = ['device' => $device, 'mount_point' => $mountPoint, 'filesystem' => $filesystem];
+                }
+            }
+        }
+
+        return $best;
+    }
+
+    private function baseDeviceName(string $device): string
+    {
+        if (!str_starts_with($device, '/dev/')) {
+            return '';
+        }
+
+        $deviceName = basename($device);
+        return preg_replace('/p?\d+$/', '', $deviceName) ?: $deviceName;
     }
 
     private function detectWindowsVolumeSerial(string $path): ?string
