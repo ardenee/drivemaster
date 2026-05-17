@@ -63,6 +63,15 @@ final class JobRepository
 
     public function complete(int $id, array $result = []): void
     {
+        $current = isset($result['progress_current']) ? (int)$result['progress_current'] : null;
+        $total = isset($result['progress_total']) ? (int)$result['progress_total'] : null;
+
+        if ($current !== null || $total !== null) {
+            $stmt = $this->db->prepare("UPDATE jobs SET status = 'complete', result_json = ?, progress_current = COALESCE(?, progress_current), progress_total = COALESCE(?, progress_total), progress_message = 'Complete', finished_at = NOW(), last_heartbeat_at = NOW() WHERE id = ? AND cancel_requested = 0");
+            $stmt->execute([json_encode($result, JSON_THROW_ON_ERROR), $current, $total, $id]);
+            return;
+        }
+
         $stmt = $this->db->prepare("UPDATE jobs SET status = 'complete', result_json = ?, progress_message = 'Complete', finished_at = NOW(), last_heartbeat_at = NOW() WHERE id = ? AND cancel_requested = 0");
         $stmt->execute([json_encode($result, JSON_THROW_ON_ERROR), $id]);
     }
