@@ -80,6 +80,7 @@ render_header('Jobs');
             $status = (string)$job['status'];
             $cancelRequested = (int)($job['cancel_requested'] ?? 0) === 1;
             $percent = job_progress_percent($job);
+            $isComplete = $status === 'complete';
             ?>
             <tr data-job-id="<?= e((string)$job['id']) ?>">
                 <td><?= e((string)$job['id']) ?></td>
@@ -87,10 +88,11 @@ render_header('Jobs');
                 <td data-field="status"><?= e($status) ?></td>
                 <td data-field="cancel_requested"><?= $cancelRequested ? 'Yes' : 'No' ?></td>
                 <td>
-                    <div class="job-progress-wrap">
+                    <div class="job-progress-wrap" data-field="progress_wrap" style="<?= $isComplete ? 'display:none' : '' ?>">
                         <div class="job-progress-bar"><div class="job-progress-fill" data-field="progress_bar" style="width: <?= e(number_format($percent, 2, '.', '')) ?>%"></div></div>
                         <div class="job-progress-text"><span data-field="progress_label"><?= e(job_progress_label($job)) ?></span> <span data-field="progress_percent"><?= $job['progress_total'] ? e(number_format($percent, 1) . '%') : '' ?></span></div>
                     </div>
+                    <span data-field="progress_complete" style="<?= $isComplete ? '' : 'display:none' ?>">Complete</span>
                 </td>
                 <td data-field="progress_message"><?= e($job['progress_message']) ?></td>
                 <td data-field="error_message"><?= e($job['error_message']) ?></td>
@@ -156,6 +158,17 @@ async function refreshJobs() {
             setText(row, 'last_heartbeat_at', job.last_heartbeat_at);
             setText(row, 'created_at', job.created_at);
             setText(row, 'finished_at', job.finished_at);
+
+            const isComplete = job.status === 'complete';
+            const wrap = row.querySelector('[data-field="progress_wrap"]');
+            const complete = row.querySelector('[data-field="progress_complete"]');
+            if (wrap) {
+                wrap.style.display = isComplete ? 'none' : '';
+            }
+            if (complete) {
+                complete.style.display = isComplete ? '' : 'none';
+                complete.textContent = 'Complete';
+            }
             const bar = row.querySelector('[data-field="progress_bar"]');
             if (bar) {
                 bar.style.width = Math.max(0, Math.min(100, Number(job.progress_percent || 0))) + '%';
