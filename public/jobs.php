@@ -73,7 +73,7 @@ render_header('Jobs');
         <button class="danger" type="submit">Remove finished jobs</button>
     </form>
     <table class="jobs-table">
-        <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Cancel</th><th>Progress</th><th>Message</th><th>Error</th><th>Heartbeat</th><th>Created</th><th>Finished</th><th>Actions</th></tr></thead>
+        <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Progress</th><th>Message</th><th>Error</th><th>Heartbeat</th><th>Created</th><th>Finished</th><th>Actions</th></tr></thead>
         <tbody>
         <?php foreach ($jobs as $job): ?>
             <?php
@@ -85,8 +85,7 @@ render_header('Jobs');
             <tr data-job-id="<?= e((string)$job['id']) ?>">
                 <td><?= e((string)$job['id']) ?></td>
                 <td data-field="job_type"><?= e($job['job_type']) ?></td>
-                <td data-field="status"><?= e($status) ?></td>
-                <td data-field="cancel_requested"><?= $cancelRequested ? 'Yes' : 'No' ?></td>
+                <td data-field="status"><?= e($status) ?><?= $cancelRequested ? ' / cancel requested' : '' ?></td>
                 <td>
                     <div class="job-progress-wrap" data-field="progress_wrap" style="<?= $isComplete ? 'display:none' : '' ?>">
                         <div class="job-progress-bar"><div class="job-progress-fill" data-field="progress_bar" style="width: <?= e(number_format($percent, 2, '.', '')) ?>%"></div></div>
@@ -149,8 +148,7 @@ async function refreshJobs() {
                 return;
             }
             setText(row, 'job_type', job.job_type);
-            setText(row, 'status', job.status);
-            setText(row, 'cancel_requested', job.cancel_requested ? 'Yes' : 'No');
+            setText(row, 'status', job.status + (job.cancel_requested ? ' / cancel requested' : ''));
             setText(row, 'progress_label', job.progress_label);
             setText(row, 'progress_percent', job.progress_percent_label === '-' ? '' : job.progress_percent_label);
             setText(row, 'progress_message', job.progress_message);
