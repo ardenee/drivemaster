@@ -34,7 +34,7 @@ try {
         $folderPath = (string)$folder['relative_path'];
         $padding = 18 + (($level + 1) * 18);
         $url = ftc_link(['drive_id' => $driveId, 'path' => $folderPath, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null, 'explorer_page' => 1]);
-        $html .= '<div class="tree-folder lazy-tree-folder" style="padding-left: ' . e((string)$padding) . 'px" data-drive-id="' . e((string)$driveId) . '" data-path="' . e($folderPath) . '" data-level="' . e((string)($level + 1)) . '" data-loaded="0" data-url="' . e($url) . '">';
+        $html .= '<div class="tree-folder lazy-tree-folder selectable-row" style="padding-left: ' . e((string)$padding) . 'px" data-id="' . e((string)$folder['id']) . '" data-entry-type="folder" data-entry-name="' . e((string)$folder['name']) . '" data-size="0" data-is-file="0" data-drive-id="' . e((string)$driveId) . '" data-path="' . e($folderPath) . '" data-level="' . e((string)($level + 1)) . '" data-loaded="0" data-url="' . e($url) . '">';
         $html .= '<span class="tree-toggle">▸</span><span class="folder-icon">📁</span> ' . e((string)$folder['name']);
         $html .= '</div>';
     }
