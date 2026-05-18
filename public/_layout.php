@@ -30,8 +30,13 @@ function render_header(string $title): void
                 <a href="category-drive-usage.php">Drive Usage</a>
             </span>
         </span>
-        <a href="planner-readiness.php">Planner Readiness</a>
-        <a href="move-planner.php">Move Planner</a>
+        <span class="nav-dropdown">
+            <button type="button" class="nav-dropdown-button">Planning ▾</button>
+            <span class="nav-dropdown-menu">
+                <a href="planner-readiness.php">Planner Readiness</a>
+                <a href="move-planner.php">Move Planner</a>
+            </span>
+        </span>
         <a href="errors.php">Errors</a>
         <a href="health.php">Health</a>
     </nav>
