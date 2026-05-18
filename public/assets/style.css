@@ -44,13 +44,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .search-results-card { padding-bottom: 12px; }
 .search-results-scroll { height: 260px; min-height: 140px; max-height: 75vh; resize: vertical; overflow: auto; border: 1px solid #d9e0e7; border-radius: 6px; }
 .search-results-table th { position: sticky; top: 0; z-index: 1; }
-.search-results-table th:nth-child(1), .search-results-table td:nth-child(1) { width: 14%; }
-.search-results-table th:nth-child(2), .search-results-table td:nth-child(2) { width: 24%; }
-.search-results-table th:nth-child(3), .search-results-table td:nth-child(3) { width: 12%; }
-.search-results-table th:nth-child(4), .search-results-table td:nth-child(4) { width: 34%; }
-.search-results-table th:nth-child(5), .search-results-table td:nth-child(5) { width: 8%; }
-.search-results-table th:nth-child(6), .search-results-table td:nth-child(6) { width: 12%; }
+.search-results-table th:nth-child(1), .search-results-table td:nth-child(1) { width: 12%; }
+.search-results-table th:nth-child(2), .search-results-table td:nth-child(2) { width: 22%; }
+.search-results-table th:nth-child(3), .search-results-table td:nth-child(3) { width: 10%; }
+.search-results-table th:nth-child(4), .search-results-table td:nth-child(4) { width: 14%; }
+.search-results-table th:nth-child(5), .search-results-table td:nth-child(5) { width: 30%; }
+.search-results-table th:nth-child(6), .search-results-table td:nth-child(6) { width: 8%; }
+.search-results-table th:nth-child(7), .search-results-table td:nth-child(7) { width: 12%; }
 .wrap-cell, .path-cell { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+.category-badge { display: inline-block; border-radius: 999px; padding: 2px 7px; margin: 1px 2px 1px 0; font-size: 12px; line-height: 1.25; border: 1px solid #b9c7d6; background: #eef3f8; color: #28394d; white-space: nowrap; }
+.category-manual { background: #e4f4ea; border-color: #9bc9a8; }
+.category-rule { background: #fff4d6; border-color: #d9bc6a; }
 .status-bar { background: #eef3f8; border: 1px solid #d9e0e7; border-radius: 5px; padding: 8px 10px; margin-top: 8px; color: #35465a; font-size: 13px; overflow-wrap: anywhere; }
 .selectable-row { cursor: default; }
 .context-menu { display: none; position: absolute; z-index: 1000; min-width: 220px; background: #fff; border: 1px solid #bfc9d5; border-radius: 6px; box-shadow: 0 8px 20px rgba(0,0,0,0.18); padding: 6px; }
