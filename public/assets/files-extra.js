@@ -106,6 +106,16 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         colorInput.dataset.enhanced = '1';
 
+        const parentLabel = colorInput.closest('label');
+        if (parentLabel) {
+            parentLabel.classList.add('colour-picker-label');
+            parentLabel.addEventListener('click', function (event) {
+                if (event.target === parentLabel) {
+                    event.preventDefault();
+                }
+            });
+        }
+
         const wrapper = document.createElement('span');
         wrapper.className = 'colour-custom-control';
         colorInput.parentNode.insertBefore(wrapper, colorInput);
@@ -128,7 +138,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         const note = document.createElement('span');
         note.className = 'colour-picker-note';
-        note.textContent = 'Use the picker, enter any #RRGGBB colour, or generate a readable random colour. The palette below is only quick picks.';
+        note.textContent = 'Use the square picker, enter any #RRGGBB colour, or generate a readable random colour. The palette below is only quick picks.';
         colorInput.parentNode.appendChild(note);
 
         colorInput.addEventListener('input', updateCategoryColourPreview);
@@ -149,6 +159,52 @@ document.addEventListener('DOMContentLoaded', function () {
         updateCategoryColourPreview();
     }
 
+    function enableCategoryTableSorting() {
+        const tables = Array.from(document.querySelectorAll('table.auto-table.compact-table'));
+        const table = tables.find(function (candidate) {
+            const headings = Array.from(candidate.querySelectorAll('thead th')).map(function (th) { return th.textContent.trim(); });
+            return headings.join('|') === 'Colour|Name|Description|Active|Manual assignments|Actions';
+        });
+        if (!table || table.dataset.sortableEnhanced === '1') {
+            return;
+        }
+        table.dataset.sortableEnhanced = '1';
+        const tbody = table.querySelector('tbody');
+        if (!tbody) {
+            return;
+        }
+        const sortableColumns = [0, 1, 2, 3, 4];
+        sortableColumns.forEach(function (index) {
+            const th = table.querySelectorAll('thead th')[index];
+            if (!th) {
+                return;
+            }
+            th.classList.add('sortable-click');
+            th.title = 'Click to sort';
+            th.addEventListener('click', function () {
+                const current = table.dataset.sortIndex === String(index) ? table.dataset.sortDir : 'desc';
+                const next = current === 'asc' ? 'desc' : 'asc';
+                table.dataset.sortIndex = String(index);
+                table.dataset.sortDir = next;
+                Array.from(table.querySelectorAll('thead th')).forEach(function (header) {
+                    header.textContent = header.textContent.replace(/\s*[▲▼]$/, '');
+                });
+                th.textContent = th.textContent.replace(/\s*[▲▼]$/, '') + (next === 'asc' ? ' ▲' : ' ▼');
+                const rows = Array.from(tbody.querySelectorAll('tr'));
+                rows.sort(function (a, b) {
+                    const av = (a.children[index] ? a.children[index].textContent.trim() : '').toLowerCase();
+                    const bv = (b.children[index] ? b.children[index].textContent.trim() : '').toLowerCase();
+                    const an = Number(av.replace(/[^0-9.-]/g, ''));
+                    const bn = Number(bv.replace(/[^0-9.-]/g, ''));
+                    const numeric = index === 4 && !Number.isNaN(an) && !Number.isNaN(bn);
+                    const result = numeric ? (an - bn) : av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' });
+                    return next === 'asc' ? result : -result;
+                });
+                rows.forEach(function (row) { tbody.appendChild(row); });
+            });
+        });
+    }
+
     document.querySelectorAll('.explorer-row.selectable-row').forEach(function (row) {
         row.addEventListener('contextmenu', function () {
             updateRenameMenuState(row);
@@ -156,6 +212,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     enhanceCategoryColourPicker();
+    enableCategoryTableSorting();
 
     document.querySelectorAll('.colour-swatch').forEach(function (swatch) {
         swatch.addEventListener('click', function () {
