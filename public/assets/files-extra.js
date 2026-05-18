@@ -159,48 +159,83 @@ document.addEventListener('DOMContentLoaded', function () {
         updateCategoryColourPreview();
     }
 
-    function enableCategoryTableSorting() {
-        const tables = Array.from(document.querySelectorAll('table.auto-table.compact-table'));
-        const table = tables.find(function (candidate) {
-            const headings = Array.from(candidate.querySelectorAll('thead th')).map(function (th) { return th.textContent.trim(); });
-            return headings.join('|') === 'Colour|Name|Description|Active|Manual assignments|Actions';
-        });
-        if (!table || table.dataset.sortableEnhanced === '1') {
-            return;
+    function cleanHeaderText(th) {
+        return th.textContent.replace(/\s*[▲▼]$/, '').trim();
+    }
+
+    function cellSortValue(row, index) {
+        const cell = row.children[index];
+        if (!cell) {
+            return '';
         }
-        table.dataset.sortableEnhanced = '1';
-        const tbody = table.querySelector('tbody');
-        if (!tbody) {
-            return;
+        return cell.textContent.trim();
+    }
+
+    function numericValue(value) {
+        const text = String(value || '').trim().toLowerCase();
+        if (text === '') {
+            return NaN;
         }
-        const sortableColumns = [0, 1, 2, 3, 4];
-        sortableColumns.forEach(function (index) {
-            const th = table.querySelectorAll('thead th')[index];
-            if (!th) {
+        const bytesMatch = text.match(/^([0-9,.]+)\s*(b|kb|mb|gb|tb|pb)$/i);
+        if (bytesMatch) {
+            const number = Number(bytesMatch[1].replace(/,/g, ''));
+            const units = { b: 1, kb: 1024, mb: 1024 ** 2, gb: 1024 ** 3, tb: 1024 ** 4, pb: 1024 ** 5 };
+            return number * units[bytesMatch[2].toLowerCase()];
+        }
+        const plain = Number(text.replace(/,/g, '').replace(/[^0-9.-]/g, ''));
+        return Number.isFinite(plain) && /[0-9]/.test(text) ? plain : NaN;
+    }
+
+    function shouldSkipSortableHeader(label) {
+        return ['actions', 'select', ''].includes(label.toLowerCase());
+    }
+
+    function enableSharedTableSorting() {
+        document.querySelectorAll('table').forEach(function (table) {
+            if (table.dataset.sortableEnhanced === '1') {
                 return;
             }
-            th.classList.add('sortable-click');
-            th.title = 'Click to sort';
-            th.addEventListener('click', function () {
-                const current = table.dataset.sortIndex === String(index) ? table.dataset.sortDir : 'desc';
-                const next = current === 'asc' ? 'desc' : 'asc';
-                table.dataset.sortIndex = String(index);
-                table.dataset.sortDir = next;
-                Array.from(table.querySelectorAll('thead th')).forEach(function (header) {
-                    header.textContent = header.textContent.replace(/\s*[▲▼]$/, '');
+            const tbody = table.tBodies && table.tBodies[0];
+            const headers = Array.from(table.querySelectorAll('thead th'));
+            if (!tbody || headers.length < 2) {
+                return;
+            }
+            table.dataset.sortableEnhanced = '1';
+            headers.forEach(function (th, index) {
+                const label = cleanHeaderText(th);
+                if (shouldSkipSortableHeader(label)) {
+                    return;
+                }
+                th.classList.add('sortable-click');
+                th.title = th.title || 'Click to sort';
+                th.addEventListener('click', function (event) {
+                    if (event.target.closest('a, button, input, select, textarea, form')) {
+                        return;
+                    }
+                    const current = table.dataset.sortIndex === String(index) ? table.dataset.sortDir : 'desc';
+                    const next = current === 'asc' ? 'desc' : 'asc';
+                    table.dataset.sortIndex = String(index);
+                    table.dataset.sortDir = next;
+                    headers.forEach(function (header) {
+                        header.textContent = cleanHeaderText(header);
+                    });
+                    th.textContent = cleanHeaderText(th) + (next === 'asc' ? ' ▲' : ' ▼');
+                    const rows = Array.from(tbody.rows);
+                    rows.sort(function (a, b) {
+                        const av = cellSortValue(a, index);
+                        const bv = cellSortValue(b, index);
+                        const an = numericValue(av);
+                        const bn = numericValue(bv);
+                        let result;
+                        if (!Number.isNaN(an) && !Number.isNaN(bn)) {
+                            result = an - bn;
+                        } else {
+                            result = av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' });
+                        }
+                        return next === 'asc' ? result : -result;
+                    });
+                    rows.forEach(function (row) { tbody.appendChild(row); });
                 });
-                th.textContent = th.textContent.replace(/\s*[▲▼]$/, '') + (next === 'asc' ? ' ▲' : ' ▼');
-                const rows = Array.from(tbody.querySelectorAll('tr'));
-                rows.sort(function (a, b) {
-                    const av = (a.children[index] ? a.children[index].textContent.trim() : '').toLowerCase();
-                    const bv = (b.children[index] ? b.children[index].textContent.trim() : '').toLowerCase();
-                    const an = Number(av.replace(/[^0-9.-]/g, ''));
-                    const bn = Number(bv.replace(/[^0-9.-]/g, ''));
-                    const numeric = index === 4 && !Number.isNaN(an) && !Number.isNaN(bn);
-                    const result = numeric ? (an - bn) : av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' });
-                    return next === 'asc' ? result : -result;
-                });
-                rows.forEach(function (row) { tbody.appendChild(row); });
             });
         });
     }
@@ -212,7 +247,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     enhanceCategoryColourPicker();
-    enableCategoryTableSorting();
+    enableSharedTableSorting();
 
     document.querySelectorAll('.colour-swatch').forEach(function (swatch) {
         swatch.addEventListener('click', function () {
