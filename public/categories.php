@@ -159,15 +159,16 @@ if (!in_array($manualType, ['all', 'file', 'folder'], true)) {
 $manualPath = trim((string)($_GET['manual_path'] ?? ''));
 $manualLimit = (string)($_GET['manual_limit'] ?? '200');
 $manualLimitOptions = [
-    '25' => '25 per page',
-    '50' => '50 per page',
-    '100' => '100 per page',
-    '200' => '200 per page',
-    '500' => '500 per page',
-    '990' => '990 per page',
-    'none' => 'No Limit, paged',
+    ['25', '25 per page'],
+    ['50', '50 per page'],
+    ['100', '100 per page'],
+    ['200', '200 per page'],
+    ['500', '500 per page'],
+    ['990', '990 per page'],
+    ['none', 'No Limit, paged'],
 ];
-if (!array_key_exists($manualLimit, $manualLimitOptions)) {
+$manualLimitValues = array_map(static fn(array $option): string => $option[0], $manualLimitOptions);
+if (!in_array($manualLimit, $manualLimitValues, true)) {
     $manualLimit = '200';
 }
 $manualPage = max(1, (int)($_GET['manual_page'] ?? 1));
@@ -356,8 +357,8 @@ render_header('Categories');
             </label>
             <label>Limit
                 <select name="manual_limit">
-                    <?php foreach ($manualLimitOptions as $value => $label): ?>
-                        <option value="<?= e($value) ?>" <?= $manualLimit === $value ? 'selected' : '' ?>><?= e($label) ?></option>
+                    <?php foreach ($manualLimitOptions as $option): ?>
+                        <option value="<?= e($option[0]) ?>" <?= $manualLimit === $option[0] ? 'selected' : '' ?>><?= e($option[1]) ?></option>
                     <?php endforeach; ?>
                 </select>
             </label>
