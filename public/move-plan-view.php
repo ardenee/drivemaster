@@ -166,6 +166,7 @@ $nextDir = $dir === 'asc' ? 'desc' : 'asc';
 $validationMessage = null;
 $validationError = null;
 $queueError = (string)($_GET['queue_error'] ?? '');
+$executionError = (string)($_GET['execution_error'] ?? '');
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = (string)($_POST['action'] ?? '');
@@ -249,6 +250,7 @@ $statusSummary = $statusStmt->fetchAll();
 <?php if ($validationMessage): ?><div class="card"><strong><?= e($validationMessage) ?></strong></div><?php endif; ?>
 <?php if ($validationError): ?><div class="card"><strong>Validation failed:</strong> <?= e($validationError) ?></div><?php endif; ?>
 <?php if ($queueError !== ''): ?><div class="card"><strong>Dry-run not queued:</strong> <?= e($queueError) ?></div><?php endif; ?>
+<?php if ($executionError !== ''): ?><div class="card"><strong>Execution preparation failed:</strong> <?= e($executionError) ?></div><?php endif; ?>
 
 <div class="card">
     <h2>Saved move plan #<?= e((string)$plan['id']) ?></h2>
@@ -270,6 +272,10 @@ $statusSummary = $statusStmt->fetchAll();
             <form method="post" action="move-plan-queue.php" style="display:inline" onsubmit="return confirm('Queue a dry-run for this validated plan? This will not move files.');">
                 <input type="hidden" name="id" value="<?= e((string)$plan['id']) ?>">
                 <button type="submit">Queue dry-run</button>
+            </form>
+            <form method="post" action="move-execution-prepare.php" style="display:inline" onsubmit="return confirm('Prepare execution records for this validated plan? This still will not move files.');">
+                <input type="hidden" name="id" value="<?= e((string)$plan['id']) ?>">
+                <button type="submit">Prepare execution</button>
             </form>
         <?php endif; ?>
     </div>
