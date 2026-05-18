@@ -91,14 +91,8 @@ function mpv_validate_plan(int $planId): array
     foreach ($items as $item) {
         $summary['checked']++;
         $reasons = [];
-        $sourceDrive = [
-            'identity_source' => $item['source_identity_source'] ?? '',
-            'serial_number' => $item['source_serial'] ?? '',
-        ];
-        $targetDrive = [
-            'identity_source' => $item['target_identity_source'] ?? '',
-            'serial_number' => $item['target_serial'] ?? '',
-        ];
+        $sourceDrive = ['identity_source' => $item['source_identity_source'] ?? '', 'serial_number' => $item['source_serial'] ?? ''];
+        $targetDrive = ['identity_source' => $item['target_identity_source'] ?? '', 'serial_number' => $item['target_serial'] ?? ''];
 
         if (empty($item['source_exists'])) {
             $reasons[] = 'Source drive no longer exists.';
@@ -171,6 +165,7 @@ $dir = strtolower((string)($_GET['dir'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
 $nextDir = $dir === 'asc' ? 'desc' : 'asc';
 $validationMessage = null;
 $validationError = null;
+$queueError = (string)($_GET['queue_error'] ?? '');
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = (string)($_POST['action'] ?? '');
@@ -253,10 +248,11 @@ $statusSummary = $statusStmt->fetchAll();
 
 <?php if ($validationMessage): ?><div class="card"><strong><?= e($validationMessage) ?></strong></div><?php endif; ?>
 <?php if ($validationError): ?><div class="card"><strong>Validation failed:</strong> <?= e($validationError) ?></div><?php endif; ?>
+<?php if ($queueError !== ''): ?><div class="card"><strong>Dry-run not queued:</strong> <?= e($queueError) ?></div><?php endif; ?>
 
 <div class="card">
     <h2>Saved move plan #<?= e((string)$plan['id']) ?></h2>
-    <p class="muted">Read-only snapshot. This page validates saved status only; it does not queue jobs or move files.</p>
+    <p class="muted">Read-only snapshot. This page validates saved status only; it does not move files.</p>
     <div class="status-bar">Status: <?= e($plan['status']) ?> | Created: <?= e($plan['created_at']) ?> | Updated: <?= e($plan['updated_at']) ?> | Candidates: <?= e(number_format((int)$plan['candidate_count'])) ?> | Total size: <?= e(format_bytes((int)$plan['total_size_bytes'])) ?></div>
     <div class="status-bar">Selected categories: <?= e(number_format(count($selectedCategoryIds))) ?> | Selected target drives: <?= e(number_format(count($selectedDriveIds))) ?> | Options: <?= e(mpv_option_flags($options)) ?></div>
     <div class="button-row">
@@ -267,6 +263,12 @@ $statusSummary = $statusStmt->fetchAll();
                 <input type="hidden" name="action" value="validate_plan">
                 <input type="hidden" name="id" value="<?= e((string)$plan['id']) ?>">
                 <button type="submit">Validate plan</button>
+            </form>
+        <?php endif; ?>
+        <?php if ($plan['status'] === 'validated'): ?>
+            <form method="post" action="move-plan-queue.php" style="display:inline" onsubmit="return confirm('Queue a dry-run for this validated plan? This will not move files.');">
+                <input type="hidden" name="id" value="<?= e((string)$plan['id']) ?>">
+                <button type="submit">Queue dry-run</button>
             </form>
         <?php endif; ?>
     </div>
