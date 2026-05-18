@@ -59,11 +59,47 @@ function cc_colour(string $value): string
     return preg_match('/^#[0-9a-fA-F]{6}$/', $value) ? strtolower($value) : '#dbeafe';
 }
 
+$message = null;
+$error = null;
+
+try {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $action = (string)($_POST['action'] ?? '');
+        $fileEntryId = (int)($_POST['file_entry_id'] ?? 0);
+        $returnUrl = (string)($_POST['return_url'] ?? 'category-conflicts.php');
+
+        if ($fileEntryId <= 0) {
+            throw new RuntimeException('No file/folder was selected.');
+        }
+
+        if ($action === 'accept_conflict') {
+            $note = trim((string)($_POST['note'] ?? ''));
+            $stmt = db()->prepare('INSERT INTO category_conflict_ignores (file_entry_id, note) VALUES (?, ?) ON DUPLICATE KEY UPDATE note = VALUES(note), updated_at = NOW()');
+            $stmt->execute([$fileEntryId, $note !== '' ? $note : null]);
+            header('Location: ' . $returnUrl);
+            exit;
+        }
+
+        if ($action === 'unaccept_conflict') {
+            $stmt = db()->prepare('DELETE FROM category_conflict_ignores WHERE file_entry_id = ?');
+            $stmt->execute([$fileEntryId]);
+            header('Location: ' . $returnUrl);
+            exit;
+        }
+    }
+} catch (Throwable $e) {
+    $error = $e->getMessage();
+}
+
 $driveId = max(0, (int)($_GET['drive_id'] ?? 0));
 $categoryId = max(0, (int)($_GET['category_id'] ?? 0));
 $source = (string)($_GET['source'] ?? 'both');
 if (!in_array($source, ['both', 'manual', 'rules'], true)) {
     $source = 'both';
+}
+$ignoreStatus = (string)($_GET['ignore_status'] ?? 'active');
+if (!in_array($ignoreStatus, ['active', 'accepted', 'all'], true)) {
+    $ignoreStatus = 'active';
 }
 $entryType = (string)($_GET['entry_type'] ?? 'any');
 if (!in_array($entryType, ['any', 'file', 'folder'], true)) {
@@ -104,6 +140,11 @@ if ($source === 'manual') {
 } elseif ($source === 'rules') {
     $where[] = 'EXISTS (SELECT 1 FROM (' . $matchSql . ') sr WHERE sr.file_entry_id = f.id AND sr.is_rule = 1)';
 }
+if ($ignoreStatus === 'active') {
+    $where[] = 'cci.id IS NULL';
+} elseif ($ignoreStatus === 'accepted') {
+    $where[] = 'cci.id IS NOT NULL';
+}
 $whereSql = $where ? ' AND ' . implode(' AND ', $where) : '';
 $sortSql = match ($sort) {
     'name' => 'f.name',
@@ -112,6 +153,7 @@ $sortSql = match ($sort) {
     'size' => 'f.size_bytes',
     'modified' => 'f.modified_at',
     'categories' => 'category_count',
+    'accepted' => 'cci.created_at',
     default => 'd.friendly_name',
 };
 
@@ -125,6 +167,7 @@ $baseSql = "
         GROUP BY file_entry_id
         HAVING COUNT(DISTINCT category_id) > 1
     ) conflicts ON conflicts.file_entry_id = f.id
+    LEFT JOIN category_conflict_ignores cci ON cci.file_entry_id = f.id
     WHERE f.is_missing = 0 {$whereSql}
 ";
 
@@ -137,7 +180,7 @@ if ($page > $totalPages) {
     $offset = ($page - 1) * CATEGORY_CONFLICTS_PAGE_SIZE;
 }
 
-$stmt = db()->prepare("SELECT f.id, f.drive_id, f.relative_path, f.name, f.extension, f.entry_type, f.size_bytes, f.modified_at, d.friendly_name, conflicts.category_count, conflicts.category_data {$baseSql} ORDER BY {$sortSql} {$dir}, f.relative_path ASC LIMIT ? OFFSET ?");
+$stmt = db()->prepare("SELECT f.id, f.drive_id, f.relative_path, f.name, f.extension, f.entry_type, f.size_bytes, f.modified_at, d.friendly_name, conflicts.category_count, conflicts.category_data, cci.id AS ignore_id, cci.note AS ignore_note, cci.created_at AS ignored_at {$baseSql} ORDER BY {$sortSql} {$dir}, f.relative_path ASC LIMIT ? OFFSET ?");
 foreach ($params as $index => $value) {
     $stmt->bindValue($index + 1, $value);
 }
@@ -146,11 +189,31 @@ $stmt->bindValue(count($params) + 2, $offset, PDO::PARAM_INT);
 $stmt->execute();
 $items = $stmt->fetchAll();
 
+$summarySql = "
+    SELECT
+        SUM(CASE WHEN cci.id IS NULL THEN 1 ELSE 0 END) AS active_count,
+        SUM(CASE WHEN cci.id IS NOT NULL THEN 1 ELSE 0 END) AS accepted_count,
+        COUNT(*) AS all_count,
+        COALESCE(SUM(CASE WHEN cci.id IS NULL AND x.entry_type = 'file' THEN x.size_bytes ELSE 0 END), 0) AS active_size
+    FROM (
+        SELECT m.file_entry_id, MAX(m.entry_type) AS entry_type, MAX(m.size_bytes) AS size_bytes
+        FROM ({$matchSql}) m
+        GROUP BY m.file_entry_id
+        HAVING COUNT(DISTINCT m.category_id) > 1
+    ) x
+    LEFT JOIN category_conflict_ignores cci ON cci.file_entry_id = x.file_entry_id
+";
+$summary = db()->query($summarySql)->fetch() ?: [];
+
 render_header('Category Conflicts');
 ?>
+<?php if ($message): ?><div class="card"><strong><?= e($message) ?></strong></div><?php endif; ?>
+<?php if ($error): ?><div class="card"><strong>Error:</strong> <?= e($error) ?></div><?php endif; ?>
+
 <div class="card">
     <h2>Category conflicts</h2>
-    <p class="muted">Shows files/folders matching more than one active category through manual assignments and/or enabled rules. These should be reviewed before move planning.</p>
+    <p class="muted">Files/folders with active category conflicts must be excluded from future move planning. Accepted conflicts are hidden from the active list but still remain marked so the planner can avoid category loops unless a specific handling rule is added later.</p>
+    <div class="status-bar">Active conflicts: <?= e(number_format((int)($summary['active_count'] ?? 0))) ?> | Accepted conflicts: <?= e(number_format((int)($summary['accepted_count'] ?? 0))) ?> | All conflicts: <?= e(number_format((int)($summary['all_count'] ?? 0))) ?> | Active conflicted file size: <?= e(format_bytes((int)($summary['active_size'] ?? 0))) ?></div>
     <form method="get">
         <div class="form-grid compact-search">
             <label>Drive
@@ -176,6 +239,13 @@ render_header('Category Conflicts');
                     <option value="rules" <?= $source === 'rules' ? 'selected' : '' ?>>Has rule match</option>
                 </select>
             </label>
+            <label>Status
+                <select name="ignore_status">
+                    <option value="active" <?= $ignoreStatus === 'active' ? 'selected' : '' ?>>Active conflicts</option>
+                    <option value="accepted" <?= $ignoreStatus === 'accepted' ? 'selected' : '' ?>>Accepted conflicts</option>
+                    <option value="all" <?= $ignoreStatus === 'all' ? 'selected' : '' ?>>All conflicts</option>
+                </select>
+            </label>
             <label>Entry type
                 <select name="entry_type">
                     <option value="any" <?= $entryType === 'any' ? 'selected' : '' ?>>Files and folders</option>
@@ -193,32 +263,38 @@ render_header('Category Conflicts');
 </div>
 
 <div class="card">
-    <h2>Conflicting items</h2>
+    <h2><?= $ignoreStatus === 'accepted' ? 'Accepted conflicts' : ($ignoreStatus === 'all' ? 'All conflicting items' : 'Active conflicting items') ?></h2>
     <p class="muted">Showing <?= e(number_format($total === 0 ? 0 : $offset + 1)) ?>-<?= e(number_format(min($offset + count($items), $total))) ?> of <?= e(number_format($total)) ?> conflicts.</p>
     <div class="table-scroll">
         <table class="auto-table compact-table selectable-table">
             <thead><tr>
-                <?php foreach (['drive' => 'Drive', 'name' => 'Name', 'type' => 'Type', 'categories' => 'Categories', 'path' => 'Path', 'size' => 'Size', 'modified' => 'Modified', 'actions' => 'Actions'] as $key => $label): ?>
+                <?php foreach (['drive' => 'Drive', 'name' => 'Name', 'type' => 'Type', 'categories' => 'Categories', 'path' => 'Path', 'size' => 'Size', 'accepted' => 'Accepted', 'actions' => 'Actions'] as $key => $label): ?>
                     <th><?php if ($key === 'actions'): ?><?= e($label) ?><?php else: ?><a href="<?= e(cc_link(['sort' => $key, 'dir' => $sort === $key ? $nextDir : 'asc', 'page' => 1])) ?>"><?= e($label) ?><?= $sort === $key ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a><?php endif; ?></th>
                 <?php endforeach; ?>
             </tr></thead>
             <tbody>
             <?php foreach ($items as $item): ?>
+                <?php $isAccepted = !empty($item['ignore_id']); ?>
                 <tr class="selectable-row">
                     <td><?= e($item['friendly_name']) ?></td>
                     <td><?= $item['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= e($item['name']) ?></td>
                     <td><?= e($item['entry_type'] === 'folder' ? 'Folder' : strtoupper((string)$item['extension']) . ' File') ?></td>
                     <td>
                         <?php foreach (explode('||', (string)$item['category_data']) as $blob): ?>
-                            <?php $parts = explode('|', $blob); if (count($parts) < 5) { continue; } $catId = (int)$parts[0]; $catName = $parts[1]; $catColor = cc_colour($parts[2]); $isManual = (int)$parts[3] === 1; $isRule = (int)$parts[4] === 1; ?>
+                            <?php $parts = explode('|', $blob); if (count($parts) < 5) { continue; } $catName = $parts[1]; $catColor = cc_colour($parts[2]); $isManual = (int)$parts[3] === 1; $isRule = (int)$parts[4] === 1; ?>
                             <span class="category-badge" style="background-color: <?= e($catColor) ?>; border-color: <?= e($catColor) ?>" title="<?= e(($isManual ? 'manual' : '') . ($isManual && $isRule ? ' + ' : '') . ($isRule ? 'rule' : '')) ?>"><?= e($catName) ?> <?= e($isManual && $isRule ? '(both)' : ($isManual ? '(manual)' : '(rule)')) ?></span>
                         <?php endforeach; ?>
                     </td>
                     <td class="wrap-cell path-cell"><?= e($item['relative_path']) ?></td>
                     <td><?= $item['entry_type'] === 'file' ? e(format_bytes((int)$item['size_bytes'])) : '' ?></td>
-                    <td><?= e($item['modified_at']) ?></td>
+                    <td><?= $isAccepted ? e(($item['ignored_at'] ?? '') . (($item['ignore_note'] ?? '') !== '' ? ' - ' . $item['ignore_note'] : '')) : 'No' ?></td>
                     <td class="actions">
                         <a class="button" href="files.php?drive_id=<?= e((string)$item['drive_id']) ?>&path=<?= e(urlencode(dirname((string)$item['relative_path']) === '.' ? '' : dirname((string)$item['relative_path']))) ?>&expanded_drive_id=<?= e((string)$item['drive_id']) ?>&selected_entry_id=<?= e((string)$item['id']) ?>#explorer-panel">Open</a>
+                        <?php if ($isAccepted): ?>
+                            <form method="post" style="display:inline"><input type="hidden" name="action" value="unaccept_conflict"><input type="hidden" name="file_entry_id" value="<?= e((string)$item['id']) ?>"><input type="hidden" name="return_url" value="<?= e($_SERVER['REQUEST_URI'] ?? 'category-conflicts.php') ?>"><button type="submit">Unaccept</button></form>
+                        <?php else: ?>
+                            <form method="post" style="display:inline"><input type="hidden" name="action" value="accept_conflict"><input type="hidden" name="file_entry_id" value="<?= e((string)$item['id']) ?>"><input type="hidden" name="return_url" value="<?= e($_SERVER['REQUEST_URI'] ?? 'category-conflicts.php') ?>"><input type="hidden" name="note" value=""><button type="submit">Accept</button></form>
+                        <?php endif; ?>
                         <a class="button" href="categories.php#rules">Rules</a>
                         <a class="button" href="categories.php#manual">Manual</a>
                     </td>
