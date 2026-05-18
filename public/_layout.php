@@ -20,10 +20,15 @@ function render_header(string $title): void
         <a href="jobs.php">Jobs</a>
         <a href="drives.php">Drives</a>
         <a href="files.php">Files</a>
-        <a href="categories.php">Categories</a>
-        <a href="category-preview.php">Category Preview</a>
-        <a href="category-coverage.php">Category Coverage</a>
-        <a href="category-conflicts.php">Category Conflicts</a>
+        <span class="nav-dropdown">
+            <button type="button" class="nav-dropdown-button">Categories ▾</button>
+            <span class="nav-dropdown-menu">
+                <a href="categories.php">Manage Categories</a>
+                <a href="category-preview.php">Preview</a>
+                <a href="category-coverage.php">Coverage</a>
+                <a href="category-conflicts.php">Conflicts</a>
+            </span>
+        </span>
         <a href="errors.php">Errors</a>
         <a href="health.php">Health</a>
     </nav>
