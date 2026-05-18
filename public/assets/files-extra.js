@@ -29,11 +29,18 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!match) {
             return null;
         }
-        return {
-            r: parseInt(match[1], 16),
-            g: parseInt(match[2], 16),
-            b: parseInt(match[3], 16)
-        };
+        return { r: parseInt(match[1], 16), g: parseInt(match[2], 16), b: parseInt(match[3], 16) };
+    }
+
+    function formatBytesLocal(bytes) {
+        bytes = Number(bytes || 0);
+        const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+        let index = 0;
+        while (bytes >= 1024 && index < units.length - 1) {
+            bytes /= 1024;
+            index++;
+        }
+        return index === 0 ? Math.round(bytes) + ' ' + units[index] : bytes.toFixed(2) + ' ' + units[index];
     }
 
     function randomReadableColour() {
@@ -67,12 +74,10 @@ document.addEventListener('DOMContentLoaded', function () {
             if (!rgb) {
                 return;
             }
-
             const strong = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.55)';
             const soft = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.18)';
             badge.style.backgroundColor = strong;
             badge.style.borderColor = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.85)';
-
             const row = badge.closest('tr');
             if (row && !row.dataset.categoryColourApplied) {
                 row.style.backgroundColor = soft;
@@ -89,7 +94,6 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!colorInput || !preview) {
             return;
         }
-
         const colour = normaliseHex(colorInput.value) || '#dbeafe';
         if (hexInput && document.activeElement !== hexInput) {
             hexInput.value = colour;
@@ -105,7 +109,6 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
         colorInput.dataset.enhanced = '1';
-
         const parentLabel = colorInput.closest('label');
         if (parentLabel) {
             parentLabel.classList.add('colour-picker-label');
@@ -115,12 +118,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             });
         }
-
         const wrapper = document.createElement('span');
         wrapper.className = 'colour-custom-control';
         colorInput.parentNode.insertBefore(wrapper, colorInput);
         wrapper.appendChild(colorInput);
-
         const hexInput = document.createElement('input');
         hexInput.type = 'text';
         hexInput.id = 'category-hex-input';
@@ -129,18 +130,15 @@ document.addEventListener('DOMContentLoaded', function () {
         hexInput.placeholder = '#dbeafe';
         hexInput.value = normaliseHex(colorInput.value) || '#dbeafe';
         wrapper.appendChild(hexInput);
-
         const randomButton = document.createElement('button');
         randomButton.type = 'button';
         randomButton.className = 'colour-random-button';
         randomButton.textContent = 'Random';
         wrapper.appendChild(randomButton);
-
         const note = document.createElement('span');
         note.className = 'colour-picker-note';
         note.textContent = 'Use the square picker, enter any #RRGGBB colour, or generate a readable random colour. The palette below is only quick picks.';
         colorInput.parentNode.appendChild(note);
-
         colorInput.addEventListener('input', updateCategoryColourPreview);
         hexInput.addEventListener('input', function () {
             const normalised = normaliseHex(hexInput.value);
@@ -155,7 +153,6 @@ document.addEventListener('DOMContentLoaded', function () {
             hexInput.value = colour;
             updateCategoryColourPreview();
         });
-
         updateCategoryColourPreview();
     }
 
@@ -165,10 +162,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function cellSortValue(row, index) {
         const cell = row.children[index];
-        if (!cell) {
-            return '';
-        }
-        return cell.textContent.trim();
+        return cell ? cell.textContent.trim() : '';
     }
 
     function numericValue(value) {
@@ -216,9 +210,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     const next = current === 'asc' ? 'desc' : 'asc';
                     table.dataset.sortIndex = String(index);
                     table.dataset.sortDir = next;
-                    headers.forEach(function (header) {
-                        header.textContent = cleanHeaderText(header);
-                    });
+                    headers.forEach(function (header) { header.textContent = cleanHeaderText(header); });
                     th.textContent = cleanHeaderText(th) + (next === 'asc' ? ' ▲' : ' ▼');
                     const rows = Array.from(tbody.rows);
                     rows.sort(function (a, b) {
@@ -240,14 +232,217 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    document.querySelectorAll('.explorer-row.selectable-row').forEach(function (row) {
-        row.addEventListener('contextmenu', function () {
-            updateRenameMenuState(row);
+    function extractUrlParam(row, key) {
+        try {
+            const rawUrl = row.dataset.url || '';
+            const url = new URL(rawUrl, window.location.href);
+            return url.searchParams.get(key) || '';
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function normaliseServerTreeRows() {
+        document.querySelectorAll('.tree-drive').forEach(function (drive) {
+            drive.classList.add('lazy-tree-drive');
+            drive.dataset.loaded = drive.nextElementSibling && drive.nextElementSibling.classList.contains('tree-folder') ? '1' : '0';
+            const toggle = drive.querySelector('.tree-toggle');
+            if (toggle && drive.dataset.loaded !== '1') {
+                toggle.textContent = '▸';
+            }
         });
+        document.querySelectorAll('.tree-folder').forEach(function (folder) {
+            folder.classList.add('lazy-tree-folder');
+            folder.dataset.driveId = folder.dataset.driveId || extractUrlParam(folder, 'drive_id');
+            folder.dataset.path = folder.dataset.path || extractUrlParam(folder, 'path');
+            const padding = parseInt(folder.style.paddingLeft || '18', 10);
+            folder.dataset.level = folder.dataset.level || String(Math.max(0, Math.round((padding - 18) / 18)));
+            folder.dataset.loaded = folder.nextElementSibling && folder.nextElementSibling.classList.contains('tree-folder') && Number(folder.nextElementSibling.dataset.level || '0') > Number(folder.dataset.level || '0') ? '1' : '0';
+        });
+    }
+
+    function insertHtmlAfter(row, html) {
+        if (!html) {
+            return [];
+        }
+        const template = document.createElement('template');
+        template.innerHTML = html;
+        const inserted = Array.from(template.content.children);
+        let anchor = row;
+        inserted.forEach(function (node) {
+            anchor.insertAdjacentElement('afterend', node);
+            anchor = node;
+        });
+        normaliseServerTreeRows();
+        return inserted;
+    }
+
+    function removeDescendants(row) {
+        const level = Number(row.dataset.level || '-1');
+        let next = row.nextElementSibling;
+        while (next && next.classList.contains('tree-folder') && Number(next.dataset.level || '0') > level) {
+            const remove = next;
+            next = next.nextElementSibling;
+            remove.remove();
+        }
+        const toggle = row.querySelector('.tree-toggle');
+        if (toggle) {
+            toggle.textContent = '▸';
+        }
+        row.dataset.loaded = '0';
+    }
+
+    function removeDriveDescendants(driveRow) {
+        let next = driveRow.nextElementSibling;
+        while (next && next.classList.contains('tree-folder')) {
+            const remove = next;
+            next = next.nextElementSibling;
+            remove.remove();
+        }
+        const toggle = driveRow.querySelector('.tree-toggle');
+        if (toggle) {
+            toggle.textContent = '▸';
+        }
+        driveRow.dataset.loaded = '0';
+    }
+
+    function loadTreeChildren(row, recursive) {
+        const isDrive = row.classList.contains('tree-drive');
+        const driveId = isDrive ? row.dataset.driveId : (row.dataset.driveId || extractUrlParam(row, 'drive_id'));
+        const parentPath = isDrive ? '' : (row.dataset.path || extractUrlParam(row, 'path'));
+        const level = isDrive ? -1 : Number(row.dataset.level || '0');
+        if (!driveId) {
+            return Promise.resolve([]);
+        }
+        if (row.dataset.loaded === '1' && !recursive) {
+            return Promise.resolve([]);
+        }
+        row.dataset.loading = '1';
+        const toggle = row.querySelector('.tree-toggle');
+        if (toggle) {
+            toggle.textContent = '…';
+        }
+        return fetch('files-tree-children.php?drive_id=' + encodeURIComponent(driveId) + '&parent_path=' + encodeURIComponent(parentPath) + '&level=' + encodeURIComponent(level), { cache: 'no-store' })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (!data.ok) {
+                    throw new Error(data.error || 'Tree load failed');
+                }
+                removeDescendants(row);
+                const inserted = insertHtmlAfter(row, data.html || '');
+                row.dataset.loaded = '1';
+                if (toggle) {
+                    toggle.textContent = inserted.length ? '▾' : '·';
+                }
+                if (recursive && inserted.length) {
+                    return inserted.reduce(function (promise, child) {
+                        return promise.then(function () { return loadTreeChildren(child, true); });
+                    }, Promise.resolve()).then(function () { return inserted; });
+                }
+                return inserted;
+            })
+            .catch(function () {
+                if (toggle) {
+                    toggle.textContent = '▸';
+                }
+                return [];
+            })
+            .finally(function () { row.dataset.loading = '0'; });
+    }
+
+    function addTreeControls() {
+        const sidebar = document.querySelector('.explorer-sidebar');
+        if (!sidebar || sidebar.dataset.controlsAdded === '1') {
+            return;
+        }
+        sidebar.dataset.controlsAdded = '1';
+        const controls = document.createElement('div');
+        controls.className = 'tree-control-row';
+        controls.innerHTML = '<button type="button" id="tree-expand-all">Expand all</button><button type="button" id="tree-collapse-all">Collapse all</button>';
+        const heading = sidebar.querySelector('h3');
+        if (heading) {
+            heading.insertAdjacentElement('afterend', controls);
+        } else {
+            sidebar.insertAdjacentElement('afterbegin', controls);
+        }
+        controls.querySelector('#tree-expand-all').addEventListener('click', function () {
+            const drives = Array.from(sidebar.querySelectorAll('.tree-drive'));
+            drives.reduce(function (promise, drive) {
+                return promise.then(function () { return loadTreeChildren(drive, true); });
+            }, Promise.resolve());
+        });
+        controls.querySelector('#tree-collapse-all').addEventListener('click', function () {
+            sidebar.querySelectorAll('.tree-drive').forEach(removeDriveDescendants);
+        });
+    }
+
+    function addLazyTreeHandlers() {
+        normaliseServerTreeRows();
+        addTreeControls();
+        const sidebar = document.querySelector('.explorer-sidebar');
+        if (!sidebar || sidebar.dataset.lazyHandlersAdded === '1') {
+            return;
+        }
+        sidebar.dataset.lazyHandlersAdded = '1';
+        sidebar.addEventListener('click', function (event) {
+            const toggle = event.target.closest('.tree-toggle');
+            if (!toggle) {
+                return;
+            }
+            const row = toggle.closest('.tree-drive,.tree-folder');
+            if (!row) {
+                return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            if (row.dataset.loaded === '1') {
+                if (row.classList.contains('tree-drive')) {
+                    removeDriveDescendants(row);
+                } else {
+                    removeDescendants(row);
+                }
+            } else {
+                loadTreeChildren(row, false);
+            }
+        }, true);
+    }
+
+    function addDriveStatusInfo() {
+        const status = document.getElementById('explorer-status');
+        const selectedDrive = document.querySelector('.tree-drive.selected') || document.querySelector('.tree-drive');
+        if (!status || !selectedDrive || !selectedDrive.dataset.driveId || status.dataset.driveInfoAdded === '1') {
+            return;
+        }
+        status.dataset.driveInfoAdded = '1';
+        fetch('files-drive-info.php?drive_id=' + encodeURIComponent(selectedDrive.dataset.driveId), { cache: 'no-store' })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (!data.ok || !data.drive) {
+                    return;
+                }
+                const text = ' | Drive: ' + data.drive.friendly_name + ' | Total: ' + formatBytesLocal(data.drive.total_bytes) + ' | Free: ' + formatBytesLocal(data.drive.free_bytes) + ' | Used: ' + formatBytesLocal(data.drive.used_bytes);
+                status.dataset.driveInfoText = text;
+                const appendInfo = function () {
+                    const info = status.dataset.driveInfoText || '';
+                    if (info && !status.textContent.includes(' | Drive: ')) {
+                        status.textContent += info;
+                    }
+                };
+                appendInfo();
+                const observer = new MutationObserver(appendInfo);
+                observer.observe(status, { childList: true, characterData: true, subtree: true });
+            })
+            .catch(function () {});
+    }
+
+    document.querySelectorAll('.explorer-row.selectable-row').forEach(function (row) {
+        row.addEventListener('contextmenu', function () { updateRenameMenuState(row); });
     });
 
     enhanceCategoryColourPicker();
     enableSharedTableSorting();
+    addLazyTreeHandlers();
+    addDriveStatusInfo();
 
     document.querySelectorAll('.colour-swatch').forEach(function (swatch) {
         swatch.addEventListener('click', function () {
