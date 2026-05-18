@@ -1,0 +1,41 @@
+CREATE TABLE move_execution_runs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    move_plan_id BIGINT UNSIGNED NOT NULL,
+    job_id BIGINT UNSIGNED NULL,
+    status ENUM('draft','queued','running','complete','failed','cancelled') NOT NULL DEFAULT 'draft',
+    dry_run_required TINYINT(1) NOT NULL DEFAULT 1,
+    started_at DATETIME NULL,
+    finished_at DATETIME NULL,
+    error_message TEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_move_execution_runs_plan FOREIGN KEY (move_plan_id) REFERENCES move_plans(id) ON DELETE CASCADE,
+    CONSTRAINT fk_move_execution_runs_job FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL,
+    KEY idx_move_execution_runs_plan (move_plan_id),
+    KEY idx_move_execution_runs_job (job_id),
+    KEY idx_move_execution_runs_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE move_execution_items (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    execution_run_id BIGINT UNSIGNED NOT NULL,
+    move_plan_item_id BIGINT UNSIGNED NOT NULL,
+    status ENUM('pending','copying','copied','verified','finalised','skipped','failed','cancelled') NOT NULL DEFAULT 'pending',
+    source_path VARCHAR(2000) NOT NULL,
+    target_path VARCHAR(2000) NOT NULL,
+    temp_target_path VARCHAR(2100) NULL,
+    size_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    copied_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    verify_method ENUM('size','hash') NOT NULL DEFAULT 'size',
+    verify_value VARCHAR(190) NULL,
+    error_message TEXT NULL,
+    started_at DATETIME NULL,
+    finished_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_move_execution_items_run FOREIGN KEY (execution_run_id) REFERENCES move_execution_runs(id) ON DELETE CASCADE,
+    CONSTRAINT fk_move_execution_items_plan_item FOREIGN KEY (move_plan_item_id) REFERENCES move_plan_items(id) ON DELETE RESTRICT,
+    UNIQUE KEY uq_move_execution_items_run_plan_item (execution_run_id, move_plan_item_id),
+    KEY idx_move_execution_items_status (status),
+    KEY idx_move_execution_items_plan_item (move_plan_item_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
