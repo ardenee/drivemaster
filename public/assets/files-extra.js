@@ -16,6 +16,14 @@ document.addEventListener('DOMContentLoaded', function () {
         renameButton.disabled = explorerSelectionRows(row).length !== 1;
     }
 
+    function normaliseHex(value) {
+        value = String(value || '').trim();
+        if (value !== '' && value[0] !== '#') {
+            value = '#' + value;
+        }
+        return /^#[0-9a-fA-F]{6}$/.test(value) ? value.toLowerCase() : '';
+    }
+
     function hexToRgb(hex) {
         const match = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '');
         if (!match) {
@@ -49,10 +57,81 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function updateCategoryColourPreview() {
+        const colorInput = document.querySelector('input[name="color_hex"]');
+        const hexInput = document.getElementById('category-hex-input');
+        const preview = document.getElementById('category-colour-preview');
+        const name = document.querySelector('input[name="name"]');
+        if (!colorInput || !preview) {
+            return;
+        }
+
+        const colour = normaliseHex(colorInput.value) || '#dbeafe';
+        if (hexInput && document.activeElement !== hexInput) {
+            hexInput.value = colour;
+        }
+        preview.style.backgroundColor = colour;
+        preview.style.borderColor = colour;
+        preview.textContent = name && name.value.trim() ? name.value.trim() : 'Category';
+    }
+
+    function enhanceCategoryColourPicker() {
+        const colorInput = document.querySelector('input[name="color_hex"]');
+        if (!colorInput || colorInput.dataset.enhanced === '1') {
+            return;
+        }
+        colorInput.dataset.enhanced = '1';
+
+        const wrapper = document.createElement('span');
+        wrapper.className = 'colour-custom-control';
+        colorInput.parentNode.insertBefore(wrapper, colorInput);
+        wrapper.appendChild(colorInput);
+
+        const hexInput = document.createElement('input');
+        hexInput.type = 'text';
+        hexInput.id = 'category-hex-input';
+        hexInput.className = 'colour-hex-input';
+        hexInput.maxLength = 7;
+        hexInput.placeholder = '#dbeafe';
+        hexInput.value = normaliseHex(colorInput.value) || '#dbeafe';
+        wrapper.appendChild(hexInput);
+
+        const note = document.createElement('span');
+        note.className = 'colour-picker-note';
+        note.textContent = 'Use the picker or enter any #RRGGBB colour. The palette below is only quick picks.';
+        colorInput.parentNode.appendChild(note);
+
+        colorInput.addEventListener('input', updateCategoryColourPreview);
+        hexInput.addEventListener('input', function () {
+            const normalised = normaliseHex(hexInput.value);
+            if (normalised) {
+                colorInput.value = normalised;
+                updateCategoryColourPreview();
+            }
+        });
+
+        updateCategoryColourPreview();
+    }
+
     document.querySelectorAll('.explorer-row.selectable-row').forEach(function (row) {
         row.addEventListener('contextmenu', function () {
             updateRenameMenuState(row);
         });
+    });
+
+    enhanceCategoryColourPicker();
+
+    document.querySelectorAll('.colour-swatch').forEach(function (swatch) {
+        swatch.addEventListener('click', function () {
+            const input = document.querySelector('input[name="color_hex"]');
+            if (input) {
+                input.value = swatch.dataset.colour;
+                updateCategoryColourPreview();
+            }
+        });
+    });
+    document.querySelectorAll('input[name="color_hex"], input[name="name"]').forEach(function (input) {
+        input.addEventListener('input', updateCategoryColourPreview);
     });
 
     fetch('category-colors.php?ts=' + Date.now(), { cache: 'no-store' })
