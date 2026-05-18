@@ -1,0 +1,40 @@
+CREATE TABLE move_plans (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(190) NULL,
+    status ENUM('draft','validated','blocked','archived') NOT NULL DEFAULT 'draft',
+    selected_category_ids_json JSON NOT NULL,
+    selected_drive_ids_json JSON NOT NULL,
+    options_json JSON NOT NULL,
+    warning_summary_json JSON NULL,
+    blocker_summary_json JSON NULL,
+    candidate_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    total_size_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_move_plans_status_created (status, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE move_plan_items (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    move_plan_id BIGINT UNSIGNED NOT NULL,
+    category_id INT UNSIGNED NOT NULL,
+    file_entry_id BIGINT UNSIGNED NOT NULL,
+    source_drive_id INT UNSIGNED NOT NULL,
+    target_drive_id INT UNSIGNED NOT NULL,
+    entry_type ENUM('file','folder') NOT NULL,
+    size_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    relative_path VARCHAR(1500) NOT NULL,
+    status ENUM('planned','blocked','skipped','validated') NOT NULL DEFAULT 'planned',
+    reason VARCHAR(500) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_move_plan_items_plan FOREIGN KEY (move_plan_id) REFERENCES move_plans(id) ON DELETE CASCADE,
+    CONSTRAINT fk_move_plan_items_category FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_move_plan_items_file_entry FOREIGN KEY (file_entry_id) REFERENCES file_entries(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_move_plan_items_source_drive FOREIGN KEY (source_drive_id) REFERENCES drives(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_move_plan_items_target_drive FOREIGN KEY (target_drive_id) REFERENCES drives(id) ON DELETE RESTRICT,
+    UNIQUE KEY uq_move_plan_items_plan_file_target (move_plan_id, file_entry_id, target_drive_id),
+    KEY idx_move_plan_items_category (category_id),
+    KEY idx_move_plan_items_source_drive (source_drive_id),
+    KEY idx_move_plan_items_target_drive (target_drive_id),
+    KEY idx_move_plan_items_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
