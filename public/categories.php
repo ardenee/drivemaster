@@ -6,6 +6,7 @@ require dirname(__DIR__) . '/src/bootstrap.php';
 require __DIR__ . '/_layout.php';
 
 const MANUAL_ASSIGNMENTS_MAX_PAGE_SIZE = 990;
+const DEFAULT_CATEGORY_COLOR = '#dbeafe';
 
 $message = null;
 $error = null;
@@ -15,6 +16,7 @@ $ruleTypes = [
     'path_contains' => 'Path contains',
     'name_contains' => 'Name contains',
 ];
+$categoryColorPalette = ['#dbeafe', '#dcfce7', '#fef3c7', '#fee2e2', '#ede9fe', '#cffafe', '#fce7f3', '#e5e7eb', '#bbf7d0', '#fed7aa', '#bfdbfe', '#ddd6fe'];
 
 function selected_int(string $key): int
 {
@@ -32,6 +34,12 @@ function category_page_link(array $params = [], string $anchor = ''): string
     return 'categories.php?' . http_build_query($query) . $anchor;
 }
 
+function category_color(string $value): string
+{
+    $value = trim($value);
+    return preg_match('/^#[0-9a-fA-F]{6}$/', $value) ? strtolower($value) : DEFAULT_CATEGORY_COLOR;
+}
+
 try {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
@@ -40,6 +48,7 @@ try {
             $id = (int)($_POST['id'] ?? 0);
             $name = trim((string)($_POST['name'] ?? ''));
             $description = trim((string)($_POST['description'] ?? ''));
+            $colorHex = category_color((string)($_POST['color_hex'] ?? DEFAULT_CATEGORY_COLOR));
             $isActive = isset($_POST['is_active']) ? 1 : 0;
 
             if ($name === '') {
@@ -47,11 +56,11 @@ try {
             }
 
             if ($id > 0) {
-                $stmt = db()->prepare('UPDATE categories SET name = ?, description = ?, is_active = ? WHERE id = ?');
-                $stmt->execute([$name, $description ?: null, $isActive, $id]);
+                $stmt = db()->prepare('UPDATE categories SET name = ?, description = ?, color_hex = ?, is_active = ? WHERE id = ?');
+                $stmt->execute([$name, $description ?: null, $colorHex, $isActive, $id]);
             } else {
-                $stmt = db()->prepare('INSERT INTO categories (name, description, is_active) VALUES (?, ?, ?)');
-                $stmt->execute([$name, $description ?: null, $isActive]);
+                $stmt = db()->prepare('INSERT INTO categories (name, description, color_hex, is_active) VALUES (?, ?, ?, ?)');
+                $stmt->execute([$name, $description ?: null, $colorHex, $isActive]);
             }
 
             header('Location: categories.php');
@@ -177,7 +186,7 @@ $manualOffset = ($manualPage - 1) * $manualPageSize;
 
 $categories = db()->query('SELECT * FROM categories ORDER BY name')->fetchAll();
 $drives = db()->query('SELECT id, friendly_name FROM drives ORDER BY friendly_name')->fetchAll();
-$rules = db()->query('SELECT cr.*, c.name AS category_name, d.friendly_name AS drive_name FROM category_rules cr JOIN categories c ON c.id = cr.category_id LEFT JOIN drives d ON d.id = cr.drive_id ORDER BY c.name, cr.rule_type, cr.pattern')->fetchAll();
+$rules = db()->query('SELECT cr.*, c.name AS category_name, c.color_hex AS category_color, d.friendly_name AS drive_name FROM category_rules cr JOIN categories c ON c.id = cr.category_id LEFT JOIN drives d ON d.id = cr.drive_id ORDER BY c.name, cr.rule_type, cr.pattern')->fetchAll();
 $manualSummary = db()->query('SELECT c.id, c.name, COUNT(cma.id) AS assignment_count FROM categories c LEFT JOIN category_manual_assignments cma ON cma.category_id = c.id GROUP BY c.id, c.name ORDER BY c.name')->fetchAll();
 
 $manualWhere = ['1=1'];
@@ -210,7 +219,7 @@ if ($manualPage > $manualTotalPages) {
     $manualPage = $manualTotalPages;
     $manualOffset = ($manualPage - 1) * $manualPageSize;
 }
-$manualStmt = db()->prepare("SELECT cma.*, c.name AS category_name, COALESCE(d1.friendly_name, d2.friendly_name) AS drive_name, fe.relative_path AS file_relative_path, fe.name AS file_name FROM category_manual_assignments cma JOIN categories c ON c.id = cma.category_id LEFT JOIN file_entries fe ON fe.id = cma.file_entry_id LEFT JOIN drives d1 ON d1.id = cma.drive_id LEFT JOIN drives d2 ON d2.id = fe.drive_id WHERE {$manualWhereSql} ORDER BY c.name, COALESCE(d1.friendly_name, d2.friendly_name), COALESCE(cma.path_prefix, fe.relative_path) LIMIT ? OFFSET ?");
+$manualStmt = db()->prepare("SELECT cma.*, c.name AS category_name, c.color_hex AS category_color, COALESCE(d1.friendly_name, d2.friendly_name) AS drive_name, fe.relative_path AS file_relative_path, fe.name AS file_name FROM category_manual_assignments cma JOIN categories c ON c.id = cma.category_id LEFT JOIN file_entries fe ON fe.id = cma.file_entry_id LEFT JOIN drives d1 ON d1.id = cma.drive_id LEFT JOIN drives d2 ON d2.id = fe.drive_id WHERE {$manualWhereSql} ORDER BY c.name, COALESCE(d1.friendly_name, d2.friendly_name), COALESCE(cma.path_prefix, fe.relative_path) LIMIT ? OFFSET ?");
 foreach ($manualParams as $index => $value) {
     $manualStmt->bindValue($index + 1, $value);
 }
@@ -218,6 +227,8 @@ $manualStmt->bindValue(count($manualParams) + 1, $manualPageSize, PDO::PARAM_INT
 $manualStmt->bindValue(count($manualParams) + 2, $manualOffset, PDO::PARAM_INT);
 $manualStmt->execute();
 $manualAssignments = $manualStmt->fetchAll();
+
+$editColor = category_color((string)($edit['color_hex'] ?? DEFAULT_CATEGORY_COLOR));
 
 render_header('Categories');
 ?>
@@ -232,6 +243,15 @@ render_header('Categories');
         <div class="form-grid">
             <label>Name <input type="text" name="name" required value="<?= e($edit['name'] ?? '') ?>"></label>
             <label>Active <input type="checkbox" name="is_active" value="1" <?= !isset($edit) || (int)($edit['is_active'] ?? 1) === 1 ? 'checked' : '' ?>></label>
+            <label>Colour
+                <input type="color" name="color_hex" value="<?= e($editColor) ?>">
+                <span class="colour-palette">
+                    <?php foreach ($categoryColorPalette as $paletteColor): ?>
+                        <button type="button" class="colour-swatch" style="background-color: <?= e($paletteColor) ?>" data-colour="<?= e($paletteColor) ?>" title="<?= e($paletteColor) ?>"></button>
+                    <?php endforeach; ?>
+                </span>
+            </label>
+            <label>Preview <span class="category-badge" id="category-colour-preview" style="background-color: <?= e($editColor) ?>; border-color: <?= e($editColor) ?>"><?= e($edit['name'] ?? 'Category') ?></span></label>
             <label class="wide">Description <textarea name="description" rows="3"><?= e($edit['description'] ?? '') ?></textarea></label>
         </div>
         <p><button type="submit">Save category</button> <?php if ($edit): ?><a class="button" href="categories.php">Cancel</a><?php endif; ?></p>
@@ -242,12 +262,13 @@ render_header('Categories');
     <h2>Categories</h2>
     <div class="table-scroll">
         <table class="auto-table compact-table">
-            <thead><tr><th>Name</th><th>Description</th><th>Active</th><th>Manual assignments</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Colour</th><th>Name</th><th>Description</th><th>Active</th><th>Manual assignments</th><th>Actions</th></tr></thead>
             <tbody>
             <?php foreach ($categories as $category): ?>
-                <?php $assignmentCount = 0; foreach ($manualSummary as $summary) { if ((int)$summary['id'] === (int)$category['id']) { $assignmentCount = (int)$summary['assignment_count']; break; } } ?>
+                <?php $assignmentCount = 0; foreach ($manualSummary as $summary) { if ((int)$summary['id'] === (int)$category['id']) { $assignmentCount = (int)$summary['assignment_count']; break; } } $rowColor = category_color((string)($category['color_hex'] ?? DEFAULT_CATEGORY_COLOR)); ?>
                 <tr>
-                    <td><?= e($category['name']) ?></td>
+                    <td><span class="category-colour-chip" style="background-color: <?= e($rowColor) ?>"></span> <?= e($rowColor) ?></td>
+                    <td><span class="category-badge" style="background-color: <?= e($rowColor) ?>; border-color: <?= e($rowColor) ?>"><?= e($category['name']) ?></span></td>
                     <td><?= e($category['description']) ?></td>
                     <td><?= (int)$category['is_active'] === 1 ? 'Yes' : 'No' ?></td>
                     <td><?= e(number_format($assignmentCount)) ?></td>
@@ -307,8 +328,9 @@ render_header('Categories');
             <thead><tr><th>Category</th><th>Enabled</th><th>Type</th><th>Pattern</th><th>Drive scope</th><th>Notes</th><th>Actions</th></tr></thead>
             <tbody>
             <?php foreach ($rules as $rule): ?>
+                <?php $ruleColor = category_color((string)($rule['category_color'] ?? DEFAULT_CATEGORY_COLOR)); ?>
                 <tr>
-                    <td><?= e($rule['category_name']) ?></td>
+                    <td><span class="category-badge" style="background-color: <?= e($ruleColor) ?>; border-color: <?= e($ruleColor) ?>"><?= e($rule['category_name']) ?></span></td>
                     <td><?= (int)$rule['is_enabled'] === 1 ? 'Yes' : 'No' ?></td>
                     <td><?= e($ruleTypes[$rule['rule_type']] ?? $rule['rule_type']) ?></td>
                     <td><?= e($rule['pattern']) ?></td>
@@ -378,10 +400,10 @@ render_header('Categories');
             <thead><tr><th>Select</th><th>Category</th><th>Type</th><th>Drive</th><th>Path / file</th><th>Created</th><th>Actions</th></tr></thead>
             <tbody>
             <?php foreach ($manualAssignments as $assignment): ?>
-                <?php $path = $assignment['assignment_type'] === 'folder' ? (string)$assignment['path_prefix'] : (string)($assignment['file_relative_path'] ?? $assignment['file_name'] ?? ''); ?>
+                <?php $path = $assignment['assignment_type'] === 'folder' ? (string)$assignment['path_prefix'] : (string)($assignment['file_relative_path'] ?? $assignment['file_name'] ?? ''); $manualColor = category_color((string)($assignment['category_color'] ?? DEFAULT_CATEGORY_COLOR)); ?>
                 <tr class="selectable-row">
                     <td><input type="checkbox" class="manual-assignment-check" value="<?= e((string)$assignment['id']) ?>"></td>
-                    <td><?= e($assignment['category_name']) ?></td>
+                    <td><span class="category-badge" style="background-color: <?= e($manualColor) ?>; border-color: <?= e($manualColor) ?>"><?= e($assignment['category_name']) ?></span></td>
                     <td><?= e($assignment['assignment_type']) ?></td>
                     <td><?= e($assignment['drive_name'] ?? '') ?></td>
                     <td class="wrap-cell path-cell"><?= e($path) ?></td>
@@ -421,9 +443,34 @@ function prepareManualAssignmentDelete() {
     return true;
 }
 
+function updateCategoryColourPreview() {
+    const input = document.querySelector('input[name="color_hex"]');
+    const preview = document.getElementById('category-colour-preview');
+    const name = document.querySelector('input[name="name"]');
+    if (!input || !preview) {
+        return;
+    }
+    preview.style.backgroundColor = input.value;
+    preview.style.borderColor = input.value;
+    preview.textContent = name && name.value.trim() ? name.value.trim() : 'Category';
+}
+
 document.querySelectorAll('.manual-assignment-check').forEach(function (checkbox) {
     checkbox.addEventListener('change', updateManualAssignmentStatus);
 });
+document.querySelectorAll('.colour-swatch').forEach(function (swatch) {
+    swatch.addEventListener('click', function () {
+        const input = document.querySelector('input[name="color_hex"]');
+        if (input) {
+            input.value = swatch.dataset.colour;
+            updateCategoryColourPreview();
+        }
+    });
+});
+document.querySelectorAll('input[name="color_hex"], input[name="name"]').forEach(function (input) {
+    input.addEventListener('input', updateCategoryColourPreview);
+});
 updateManualAssignmentStatus();
+updateCategoryColourPreview();
 </script>
 <?php render_footer(); ?>
