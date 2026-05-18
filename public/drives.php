@@ -106,37 +106,31 @@ render_header('Drives');
 
 <div class="card">
     <h2>Known drives</h2>
-    <table>
-        <thead><tr><th>Name</th><th>Form factor</th><th>Stable identity</th><th>Source</th><th>Model</th><th>Device</th><th>Path</th><th>Size</th><th>Free</th><th>Last scanned</th><th>Actions</th></tr></thead>
-        <tbody>
-        <?php foreach ($drives as $drive): ?>
-            <tr>
-                <td><?= e($drive['friendly_name']) ?></td>
-                <td><?= e($drive['form_factor'] ?? '3.5') ?></td>
-                <td><?= e($drive['serial_number']) ?></td>
-                <td><?= e($drive['identity_source'] ?? '') ?></td>
-                <td><?= e(trim(($drive['vendor'] ?? '') . ' ' . ($drive['model'] ?? ''))) ?></td>
-                <td><?= e($drive['device_name'] ?? '') ?></td>
-                <td><?= e($drive['mount_path']) ?></td>
-                <td><?= e(format_bytes((int)$drive['total_bytes'])) ?></td>
-                <td><?= e(format_bytes((int)$drive['free_bytes'])) ?></td>
-                <td><?= e($drive['last_scanned_at'] ?? 'Never') ?></td>
-                <td class="actions">
-                    <a class="button" href="drives.php?edit=<?= e((string)$drive['id']) ?>">Edit</a>
-                    <form method="post" style="display:inline">
-                        <input type="hidden" name="action" value="refresh_info">
-                        <input type="hidden" name="id" value="<?= e((string)$drive['id']) ?>">
-                        <button type="submit">Drive Info</button>
-                    </form>
-                    <form method="post" style="display:inline" onsubmit="return confirm('Delete this drive, its inventory, and related scan jobs?');">
-                        <input type="hidden" name="action" value="delete">
-                        <input type="hidden" name="id" value="<?= e((string)$drive['id']) ?>">
-                        <button class="danger" type="submit">Delete</button>
-                    </form>
-                </td>
-            </tr>
-        <?php endforeach; ?>
-        </tbody>
-    </table>
+    <div class="table-scroll">
+        <table class="drives-table auto-table compact-table">
+            <thead><tr><th>Name</th><th>Form</th><th>Stable identity</th><th>Source</th><th>Model</th><th>Device</th><th>Path</th><th>Size</th><th>Free</th><th>Last scanned</th><th>Actions</th></tr></thead>
+            <tbody>
+            <?php foreach ($drives as $drive): ?>
+                <tr>
+                    <td class="nowrap">💽 <?= e($drive['friendly_name']) ?></td>
+                    <td><?= e($drive['form_factor'] ?? '3.5') ?></td>
+                    <td><?= e($drive['serial_number']) ?></td>
+                    <td><?= e($drive['identity_source'] ?? '') ?></td>
+                    <td><?= e(trim(($drive['vendor'] ?? '') . ' ' . ($drive['model'] ?? ''))) ?></td>
+                    <td><?= e($drive['device_name'] ?? '') ?></td>
+                    <td><?= e($drive['mount_path']) ?></td>
+                    <td class="nowrap"><?= e(format_bytes((int)$drive['total_bytes'])) ?></td>
+                    <td class="nowrap"><?= e(format_bytes((int)$drive['free_bytes'])) ?></td>
+                    <td class="nowrap"><?= e($drive['last_scanned_at'] ?? 'Never') ?></td>
+                    <td class="actions">
+                        <a class="button" href="drives.php?edit=<?= e((string)$drive['id']) ?>">Edit</a>
+                        <form method="post" style="display:inline"><input type="hidden" name="action" value="refresh_info"><input type="hidden" name="id" value="<?= e((string)$drive['id']) ?>"><button type="submit">Drive Info</button></form>
+                        <form method="post" style="display:inline" onsubmit="return confirm('Delete this drive, its inventory, and related scan jobs?');"><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?= e((string)$drive['id']) ?>"><button class="danger" type="submit">Delete</button></form>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
 </div>
 <?php render_footer(); ?>
