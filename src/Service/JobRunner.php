@@ -33,6 +33,7 @@ final class JobRunner
             match ($job['job_type']) {
                 'scan_drive' => $this->runScanDrive((int)$job['id'], $payload),
                 'refresh_drive_info' => $this->runRefreshDriveInfo((int)$job['id'], $payload),
+                'move_plan_dry_run' => $this->runMovePlanDryRun((int)$job['id'], $payload),
                 default => throw new \RuntimeException('Unknown job type: ' . $job['job_type']),
             };
         } catch (Throwable $e) {
@@ -136,6 +137,60 @@ final class JobRunner
 
         $this->jobs->progress($jobId, 1, 1, 'Drive info refreshed');
         $this->jobs->complete($jobId, ['drive_id' => $driveId, 'path' => $path, 'progress_current' => 1, 'progress_total' => 1]);
+    }
+
+    private function runMovePlanDryRun(int $jobId, array $payload): void
+    {
+        $planId = (int)($payload['move_plan_id'] ?? 0);
+        if ($planId <= 0) {
+            throw new \RuntimeException('Dry-run job is missing move plan ID.');
+        }
+
+        $stmt = $this->db->prepare('SELECT id, status FROM move_plans WHERE id = ?');
+        $stmt->execute([$planId]);
+        $plan = $stmt->fetch();
+        if (!$plan) {
+            throw new \RuntimeException('Move plan no longer exists.');
+        }
+        if ((string)$plan['status'] !== 'validated') {
+            throw new \RuntimeException('Move plan must be validated before dry-run.');
+        }
+
+        $countStmt = $this->db->prepare("SELECT COUNT(*) FROM move_plan_items WHERE move_plan_id = ? AND status = 'validated'");
+        $countStmt->execute([$planId]);
+        $total = (int)$countStmt->fetchColumn();
+        if ($total <= 0) {
+            throw new \RuntimeException('Move plan has no validated items to dry-run.');
+        }
+
+        $this->throwIfCancelled($jobId);
+        $this->jobs->progress($jobId, 0, $total, 'Starting dry-run for move plan #' . $planId);
+
+        $itemStmt = $this->db->prepare("SELECT mpi.id, mpi.relative_path, mpi.size_bytes, sd.friendly_name AS source_drive_name, td.friendly_name AS target_drive_name FROM move_plan_items mpi JOIN drives sd ON sd.id = mpi.source_drive_id JOIN drives td ON td.id = mpi.target_drive_id WHERE mpi.move_plan_id = ? AND mpi.status = 'validated' ORDER BY mpi.id");
+        $itemStmt->execute([$planId]);
+
+        $checked = 0;
+        $bytes = 0;
+        $lastUpdateAt = 0.0;
+        while ($item = $itemStmt->fetch()) {
+            $this->throwIfCancelled($jobId);
+            $checked++;
+            $bytes += (int)$item['size_bytes'];
+            $now = microtime(true);
+            if (($now - $lastUpdateAt) >= 0.75 || ($checked % 500) === 0 || $checked === $total) {
+                $lastUpdateAt = $now;
+                $this->jobs->progress($jobId, $checked, $total, 'Dry-run checked ' . $checked . ' of ' . $total . ' items');
+            }
+        }
+
+        $this->jobs->complete($jobId, [
+            'move_plan_id' => $planId,
+            'items_checked' => $checked,
+            'bytes_checked' => $bytes,
+            'dry_run_only' => true,
+            'progress_current' => $checked,
+            'progress_total' => $total,
+        ]);
     }
 
     private function throwIfCancelled(int $jobId): void
