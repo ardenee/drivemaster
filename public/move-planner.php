@@ -68,6 +68,21 @@ function mp_already_on_targets(array $currentDriveRows, array $targetDriveIds): 
     return $size;
 }
 
+function mp_candidate_links(array $row, bool $includeAccepted): string
+{
+    $categoryId = (int)$row['category']['category_id'];
+    $links = [];
+    foreach ($row['targets'] as $target) {
+        $targetDriveId = (int)$target['drive']['id'];
+        $query = ['category_id' => $categoryId, 'target_drive_id' => $targetDriveId, 'entry_type' => 'file'];
+        if ($includeAccepted) {
+            $query['include_accepted'] = '1';
+        }
+        $links[] = '<a class="button" href="move-candidates.php?' . e(http_build_query($query)) . '">Files to ' . e((string)$target['drive']['friendly_name']) . '</a>';
+    }
+    return $links ? implode(' ', $links) : '';
+}
+
 $selectedCategoryIds = mp_selected_ids('category_ids');
 $selectedDriveIds = mp_selected_ids('drive_ids');
 $allowSpanning = isset($_GET['allow_spanning']);
@@ -379,7 +394,7 @@ render_header('Move Planner');
     <p class="muted">This compares where category data currently lives with the proposed target allocation. It is still an estimate; exact file-level move jobs come later.</p>
     <div class="table-scroll">
         <table class="auto-table compact-table">
-            <thead><tr><th>Category</th><th>Move status</th><th>Planner size</th><th>Already on target</th><th>Estimated move size</th><th>Active conflict excluded</th><th>Accepted conflict</th></tr></thead>
+            <thead><tr><th>Category</th><th>Move status</th><th>Planner size</th><th>Already on target</th><th>Estimated move size</th><th>Active conflict excluded</th><th>Accepted conflict</th><th>Drilldown</th></tr></thead>
             <tbody>
             <?php foreach ($plannerRows as $row): ?>
                 <?php $cat = $row['category']; $color = mp_colour((string)$cat['color_hex']); ?>
@@ -391,9 +406,10 @@ render_header('Move Planner');
                     <td><strong><?= e(format_bytes((int)$row['move_size'])) ?></strong></td>
                     <td><?= e(format_bytes((int)$cat['active_conflict_size'])) ?></td>
                     <td><?= e($includeAccepted ? 'Included: ' : 'Excluded: ') ?><?= e(format_bytes((int)$cat['accepted_conflict_size'])) ?></td>
+                    <td class="actions"><?= mp_candidate_links($row, $includeAccepted) ?></td>
                 </tr>
             <?php endforeach; ?>
-            <?php if (!$plannerRows): ?><tr><td colspan="7">No move workload generated.</td></tr><?php endif; ?>
+            <?php if (!$plannerRows): ?><tr><td colspan="8">No move workload generated.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>
