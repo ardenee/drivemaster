@@ -23,6 +23,7 @@ function render_header(string $title): void
         <a href="categories.php">Categories</a>
         <a href="category-preview.php">Category Preview</a>
         <a href="category-coverage.php">Category Coverage</a>
+        <a href="category-conflicts.php">Category Conflicts</a>
         <a href="errors.php">Errors</a>
         <a href="health.php">Health</a>
     </nav>
