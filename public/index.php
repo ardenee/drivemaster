@@ -21,9 +21,9 @@ render_header('Dashboard');
 
 <div class="card">
     <table>
-        <tr><th>Known drives</th><td><?= e((string)$stats['drives']) ?></td></tr>
-        <tr><th>Files indexed</th><td><?= e((string)$stats['files']) ?></td></tr>
-        <tr><th>Folders indexed</th><td><?= e((string)$stats['folders']) ?></td></tr>
+        <tr><th>Known drives</th><td><?= e(number_format($stats['drives'])) ?></td></tr>
+        <tr><th>Files indexed</th><td><?= e(number_format($stats['files'])) ?></td></tr>
+        <tr><th>Folders indexed</th><td><?= e(number_format($stats['folders'])) ?></td></tr>
         <tr><th>Total indexed size</th><td><?= e(format_bytes($stats['bytes'])) ?></td></tr>
     </table>
 </div>
