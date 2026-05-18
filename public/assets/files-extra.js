@@ -36,6 +36,30 @@ document.addEventListener('DOMContentLoaded', function () {
         };
     }
 
+    function randomReadableColour() {
+        const hue = Math.floor(Math.random() * 360);
+        const saturation = 62 + Math.floor(Math.random() * 18);
+        const lightness = 72 + Math.floor(Math.random() * 10);
+        return hslToHex(hue, saturation, lightness);
+    }
+
+    function hslToHex(h, s, l) {
+        s /= 100;
+        l /= 100;
+        const c = (1 - Math.abs(2 * l - 1)) * s;
+        const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+        const m = l - c / 2;
+        let r = 0, g = 0, b = 0;
+        if (h < 60) { r = c; g = x; b = 0; }
+        else if (h < 120) { r = x; g = c; b = 0; }
+        else if (h < 180) { r = 0; g = c; b = x; }
+        else if (h < 240) { r = 0; g = x; b = c; }
+        else if (h < 300) { r = x; g = 0; b = c; }
+        else { r = c; g = 0; b = x; }
+        const toHex = function (value) { return Math.round((value + m) * 255).toString(16).padStart(2, '0'); };
+        return '#' + toHex(r) + toHex(g) + toHex(b);
+    }
+
     function applyCategoryColours(colors) {
         document.querySelectorAll('.category-badge').forEach(function (badge) {
             const name = badge.textContent.trim();
@@ -96,9 +120,15 @@ document.addEventListener('DOMContentLoaded', function () {
         hexInput.value = normaliseHex(colorInput.value) || '#dbeafe';
         wrapper.appendChild(hexInput);
 
+        const randomButton = document.createElement('button');
+        randomButton.type = 'button';
+        randomButton.className = 'colour-random-button';
+        randomButton.textContent = 'Random';
+        wrapper.appendChild(randomButton);
+
         const note = document.createElement('span');
         note.className = 'colour-picker-note';
-        note.textContent = 'Use the picker or enter any #RRGGBB colour. The palette below is only quick picks.';
+        note.textContent = 'Use the picker, enter any #RRGGBB colour, or generate a readable random colour. The palette below is only quick picks.';
         colorInput.parentNode.appendChild(note);
 
         colorInput.addEventListener('input', updateCategoryColourPreview);
@@ -108,6 +138,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 colorInput.value = normalised;
                 updateCategoryColourPreview();
             }
+        });
+        randomButton.addEventListener('click', function () {
+            const colour = randomReadableColour();
+            colorInput.value = colour;
+            hexInput.value = colour;
+            updateCategoryColourPreview();
         });
 
         updateCategoryColourPreview();
@@ -124,8 +160,12 @@ document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.colour-swatch').forEach(function (swatch) {
         swatch.addEventListener('click', function () {
             const input = document.querySelector('input[name="color_hex"]');
+            const hexInput = document.getElementById('category-hex-input');
             if (input) {
                 input.value = swatch.dataset.colour;
+                if (hexInput) {
+                    hexInput.value = swatch.dataset.colour;
+                }
                 updateCategoryColourPreview();
             }
         });
