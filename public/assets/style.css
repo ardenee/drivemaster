@@ -17,6 +17,7 @@ tbody tr:hover td { background: #f8fbff; }
 tbody tr.selected-row td, .selected-row td, .selected-row { background: #cfe5ff !important; }
 input, select, textarea, button { font: inherit; padding: 8px; box-sizing: border-box; }
 input[type=text], input[type=number], textarea, select { width: 100%; border: 1px solid #c8d1dc; border-radius: 5px; }
+input[type=color] { width: 64px; height: 38px; padding: 3px; border: 1px solid #c8d1dc; border-radius: 5px; vertical-align: middle; }
 button, .button { display: inline-block; background: #1f5fa8; color: #fff; border: 0; border-radius: 5px; padding: 8px 12px; cursor: pointer; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 .button.danger, button.danger { background: #a83232; }
@@ -52,6 +53,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .category-badge { display: inline-block; border-radius: 999px; padding: 2px 7px; margin: 1px 2px 1px 0; font-size: 12px; line-height: 1.25; border: 1px solid #b9c7d6; background: #eef3f8; color: #28394d; white-space: nowrap; }
 .category-manual { background: #e4f4ea; border-color: #9bc9a8; }
 .category-rule { background: #fff4d6; border-color: #d9bc6a; }
+.colour-palette { display: inline-flex; flex-wrap: wrap; gap: 5px; margin-left: 8px; vertical-align: middle; }
+.colour-swatch { width: 22px; height: 22px; min-width: 22px; padding: 0; border: 1px solid #8090a3; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.55); }
+.category-colour-chip { display: inline-block; width: 18px; height: 18px; border: 1px solid #8a97a7; border-radius: 4px; vertical-align: middle; margin-right: 6px; }
 .status-bar { background: #eef3f8; border: 1px solid #d9e0e7; border-radius: 5px; padding: 8px 10px; margin-top: 8px; color: #35465a; font-size: 13px; overflow-wrap: anywhere; }
 .selectable-row { cursor: default; }
 .context-menu { display: none; position: absolute; z-index: 1000; min-width: 220px; background: #fff; border: 1px solid #bfc9d5; border-radius: 6px; box-shadow: 0 8px 20px rgba(0,0,0,0.18); padding: 6px; }
