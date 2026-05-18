@@ -61,4 +61,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .colour-picker-label input[type=color], .colour-picker-label .colour-custom-control, .colour-picker-label .colour-palette, .colour-picker-label .colour-swatch { pointer-events: auto; }
 .sortable-click { cursor: pointer; user-select: none; }
 .sortable-click:hover { text-decoration: underline; }
+.context-menu { display: none; position: absolute; z-index: 3000; min-width: 190px; padding: 6px; background: #fff; border: 1px solid #bfc9d5; border-radius: 6px; box-shadow: 0 8px 22px rgba(0,0,0,0.22); }
+.context-menu.visible { display: block; }
+.context-menu button { display: block; width: 100%; margin: 0; padding: 8px 10px; text-align: left; color: #222; background: transparent; border-radius: 4px; }
+.context-menu button:hover:not(:disabled) { background: #eef3f8; }
+.context-menu button:disabled { color: #9aa7b5; background: transparent; }
+.context-menu hr { border: 0; border-top: 1px solid #e2e8ef; margin: 6px 0; }
+.context-dialog.hidden { display: none; }
+.context-dialog { position: fixed; inset: 0; z-index: 3100; display: flex; align-items: center; justify-content: center; background: rgba(20, 30, 40, 0.35); padding: 20px; }
+.context-dialog-card { width: min(560px, 96vw); background: #fff; border: 1px solid #c8d1dc; border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.28); padding: 18px; }
 @media (max-width: 900px) { .form-grid, .form-grid.compact-search, .explorer-wrap { grid-template-columns: 1fr; } .explorer-sidebar { max-height: 320px; } }
