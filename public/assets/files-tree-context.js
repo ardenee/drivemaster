@@ -18,6 +18,42 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function getUrlParam(row, key) {
+        try {
+            const url = new URL(row.dataset.url || '', window.location.href);
+            return url.searchParams.get(key) || '';
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function resolveTreeFolder(row) {
+        if (row.dataset.id) {
+            return Promise.resolve(true);
+        }
+        const driveId = row.dataset.driveId || getUrlParam(row, 'drive_id');
+        const path = row.dataset.path || getUrlParam(row, 'path');
+        if (!driveId || !path) {
+            return Promise.resolve(false);
+        }
+        return fetch('tree-resolve.php?drive_id=' + encodeURIComponent(driveId) + '&path=' + encodeURIComponent(path), { cache: 'no-store' })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (!data.ok) {
+                    return false;
+                }
+                row.dataset.id = String(data.id);
+                row.dataset.entryType = 'folder';
+                row.dataset.entryName = data.name || row.textContent.trim().replace(/^▸|^▾|^·|^…/, '').replace(/^📁/, '').trim();
+                row.dataset.size = '0';
+                row.dataset.isFile = '0';
+                row.dataset.driveId = driveId;
+                row.dataset.path = path;
+                return true;
+            })
+            .catch(function () { return false; });
+    }
+
     function selectedTreeFolderIds() {
         if (!treeFolderRow || !treeFolderRow.dataset.id) {
             return [];
@@ -85,7 +121,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     sidebar.addEventListener('contextmenu', function (event) {
         const folder = event.target.closest('.tree-folder');
-        if (!folder || !folder.dataset.id) {
+        if (!folder) {
             return;
         }
 
@@ -103,12 +139,17 @@ document.addEventListener('DOMContentLoaded', function () {
             renameButton.disabled = false;
         }
 
-        menu.style.left = event.pageX + 'px';
-        menu.style.top = event.pageY + 'px';
-        menu.classList.add('visible');
-        if (driveMenu) {
-            driveMenu.classList.remove('visible');
-        }
+        resolveTreeFolder(folder).then(function (ok) {
+            if (!ok) {
+                return;
+            }
+            menu.style.left = event.pageX + 'px';
+            menu.style.top = event.pageY + 'px';
+            menu.classList.add('visible');
+            if (driveMenu) {
+                driveMenu.classList.remove('visible');
+            }
+        });
     }, true);
 
     menu.addEventListener('click', function (event) {
