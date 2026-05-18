@@ -11,6 +11,7 @@ function render_header(string $title): void
         <title><?= e($title) ?> - DriveMaster</title>
         <link rel="stylesheet" href="assets/style.css">
         <script src="assets/files-extra.js" defer></script>
+        <script src="assets/files-tree-context.js" defer></script>
     </head>
     <body>
     <header><h1>DriveMaster</h1></header>
