@@ -5,6 +5,8 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 require __DIR__ . '/_layout.php';
 
+const MANUAL_ASSIGNMENTS_MAX_PAGE_SIZE = 990;
+
 $message = null;
 $error = null;
 $ruleTypes = [
@@ -17,6 +19,17 @@ $ruleTypes = [
 function selected_int(string $key): int
 {
     return max(0, (int)($_GET[$key] ?? 0));
+}
+
+function category_page_link(array $params = [], string $anchor = ''): string
+{
+    $query = array_merge($_GET, $params);
+    foreach ($query as $key => $value) {
+        if ($value === null) {
+            unset($query[$key]);
+        }
+    }
+    return 'categories.php?' . http_build_query($query) . $anchor;
 }
 
 try {
@@ -144,7 +157,22 @@ if (!in_array($manualType, ['all', 'file', 'folder'], true)) {
     $manualType = 'all';
 }
 $manualPath = trim((string)($_GET['manual_path'] ?? ''));
-$manualLimit = max(25, min(1000, (int)($_GET['manual_limit'] ?? 200)));
+$manualLimit = (string)($_GET['manual_limit'] ?? '200');
+$manualLimitOptions = [
+    '25' => '25 per page',
+    '50' => '50 per page',
+    '100' => '100 per page',
+    '200' => '200 per page',
+    '500' => '500 per page',
+    '990' => '990 per page',
+    'none' => 'No Limit, paged',
+];
+if (!array_key_exists($manualLimit, $manualLimitOptions)) {
+    $manualLimit = '200';
+}
+$manualPage = max(1, (int)($_GET['manual_page'] ?? 1));
+$manualPageSize = $manualLimit === 'none' ? MANUAL_ASSIGNMENTS_MAX_PAGE_SIZE : max(1, min(MANUAL_ASSIGNMENTS_MAX_PAGE_SIZE, (int)$manualLimit));
+$manualOffset = ($manualPage - 1) * $manualPageSize;
 
 $categories = db()->query('SELECT * FROM categories ORDER BY name')->fetchAll();
 $drives = db()->query('SELECT id, friendly_name FROM drives ORDER BY friendly_name')->fetchAll();
@@ -176,11 +204,17 @@ $manualWhereSql = implode(' AND ', $manualWhere);
 $manualCountStmt = db()->prepare("SELECT COUNT(*) FROM category_manual_assignments cma JOIN categories c ON c.id = cma.category_id LEFT JOIN file_entries fe ON fe.id = cma.file_entry_id LEFT JOIN drives d1 ON d1.id = cma.drive_id LEFT JOIN drives d2 ON d2.id = fe.drive_id WHERE {$manualWhereSql}");
 $manualCountStmt->execute($manualParams);
 $manualTotal = (int)$manualCountStmt->fetchColumn();
-$manualStmt = db()->prepare("SELECT cma.*, c.name AS category_name, COALESCE(d1.friendly_name, d2.friendly_name) AS drive_name, fe.relative_path AS file_relative_path, fe.name AS file_name FROM category_manual_assignments cma JOIN categories c ON c.id = cma.category_id LEFT JOIN file_entries fe ON fe.id = cma.file_entry_id LEFT JOIN drives d1 ON d1.id = cma.drive_id LEFT JOIN drives d2 ON d2.id = fe.drive_id WHERE {$manualWhereSql} ORDER BY c.name, COALESCE(d1.friendly_name, d2.friendly_name), COALESCE(cma.path_prefix, fe.relative_path) LIMIT ?");
+$manualTotalPages = max(1, (int)ceil($manualTotal / $manualPageSize));
+if ($manualPage > $manualTotalPages) {
+    $manualPage = $manualTotalPages;
+    $manualOffset = ($manualPage - 1) * $manualPageSize;
+}
+$manualStmt = db()->prepare("SELECT cma.*, c.name AS category_name, COALESCE(d1.friendly_name, d2.friendly_name) AS drive_name, fe.relative_path AS file_relative_path, fe.name AS file_name FROM category_manual_assignments cma JOIN categories c ON c.id = cma.category_id LEFT JOIN file_entries fe ON fe.id = cma.file_entry_id LEFT JOIN drives d1 ON d1.id = cma.drive_id LEFT JOIN drives d2 ON d2.id = fe.drive_id WHERE {$manualWhereSql} ORDER BY c.name, COALESCE(d1.friendly_name, d2.friendly_name), COALESCE(cma.path_prefix, fe.relative_path) LIMIT ? OFFSET ?");
 foreach ($manualParams as $index => $value) {
     $manualStmt->bindValue($index + 1, $value);
 }
-$manualStmt->bindValue(count($manualParams) + 1, $manualLimit, PDO::PARAM_INT);
+$manualStmt->bindValue(count($manualParams) + 1, $manualPageSize, PDO::PARAM_INT);
+$manualStmt->bindValue(count($manualParams) + 2, $manualOffset, PDO::PARAM_INT);
 $manualStmt->execute();
 $manualAssignments = $manualStmt->fetchAll();
 
@@ -322,13 +356,14 @@ render_header('Categories');
             </label>
             <label>Limit
                 <select name="manual_limit">
-                    <?php foreach ([25, 50, 100, 200, 500, 1000] as $limitOption): ?>
-                        <option value="<?= e((string)$limitOption) ?>" <?= $manualLimit === $limitOption ? 'selected' : '' ?>><?= e((string)$limitOption) ?></option>
+                    <?php foreach ($manualLimitOptions as $value => $label): ?>
+                        <option value="<?= e($value) ?>" <?= $manualLimit === $value ? 'selected' : '' ?>><?= e($label) ?></option>
                     <?php endforeach; ?>
                 </select>
             </label>
             <label class="wide">Path/name contains <input type="text" name="manual_path" value="<?= e($manualPath) ?>"></label>
         </div>
+        <input type="hidden" name="manual_page" value="1">
         <div class="button-row"><button type="submit">Filter assignments</button> <a class="button" href="categories.php#manual">Clear</a></div>
     </form>
 
@@ -336,7 +371,7 @@ render_header('Categories');
         <form method="post" id="manual-delete-selected-form" onsubmit="return prepareManualAssignmentDelete();"><input type="hidden" name="action" value="delete_selected_manual_assignments"><input type="hidden" name="ids" id="selected-manual-assignment-ids"><button class="danger" type="submit">Delete selected</button></form>
     </div>
 
-    <p class="muted">Showing <?= e(number_format(count($manualAssignments))) ?> of <?= e(number_format($manualTotal)) ?> matching manual assignments.</p>
+    <p class="muted">Showing <?= e(number_format($manualTotal === 0 ? 0 : $manualOffset + 1)) ?>-<?= e(number_format(min($manualOffset + count($manualAssignments), $manualTotal))) ?> of <?= e(number_format($manualTotal)) ?> matching manual assignments.</p>
     <div class="table-scroll">
         <table class="auto-table compact-table selectable-table" data-status-target="manual-assignment-status">
             <thead><tr><th>Select</th><th>Category</th><th>Type</th><th>Drive</th><th>Path / file</th><th>Created</th><th>Actions</th></tr></thead>
@@ -357,6 +392,9 @@ render_header('Categories');
             </tbody>
         </table>
     </div>
+    <?php if ($manualTotal > $manualPageSize): ?>
+        <div class="status-bar">Page <?= e(number_format($manualPage)) ?> of <?= e(number_format($manualTotalPages)) ?>. <a class="button" href="<?= e(category_page_link(['manual_page' => max(1, $manualPage - 1)], '#manual')) ?>">Previous</a> <a class="button" href="<?= e(category_page_link(['manual_page' => min($manualTotalPages, $manualPage + 1)], '#manual')) ?>">Next</a></div>
+    <?php endif; ?>
     <div class="status-bar" id="manual-assignment-status">Selected: 0</div>
 </div>
 
