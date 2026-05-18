@@ -42,6 +42,32 @@ function mp_selected_ids(string $key): array
     return array_values(array_unique(array_filter(array_map('intval', $raw), static fn(int $id): bool => $id > 0)));
 }
 
+function mp_drive_summary(array $driveRows): string
+{
+    $parts = [];
+    foreach ($driveRows as $row) {
+        $parts[] = $row['drive_name'] . ': ' . format_bytes((int)$row['planner_size']);
+    }
+    return $parts ? implode(', ', $parts) : 'None';
+}
+
+function mp_target_drive_ids(array $targets): array
+{
+    return array_values(array_unique(array_map(static fn(array $target): int => (int)$target['drive']['id'], $targets)));
+}
+
+function mp_already_on_targets(array $currentDriveRows, array $targetDriveIds): int
+{
+    $targetSet = array_fill_keys($targetDriveIds, true);
+    $size = 0;
+    foreach ($currentDriveRows as $row) {
+        if (isset($targetSet[(int)$row['drive_id']])) {
+            $size += (int)$row['planner_size'];
+        }
+    }
+    return $size;
+}
+
 $selectedCategoryIds = mp_selected_ids('category_ids');
 $selectedDriveIds = mp_selected_ids('drive_ids');
 $allowSpanning = isset($_GET['allow_spanning']);
@@ -79,6 +105,7 @@ $activeConflictSql = "SELECT x.file_entry_id FROM (SELECT file_entry_id FROM ({$
 $acceptedConflictSql = "SELECT x.file_entry_id FROM (SELECT file_entry_id FROM ({$matchSql}) cm GROUP BY file_entry_id HAVING COUNT(DISTINCT category_id) > 1) x JOIN category_conflict_ignores cci ON cci.file_entry_id = x.file_entry_id";
 
 $categoryStats = [];
+$categoryDriveStats = [];
 if ($selectedCategoryIds) {
     $placeholders = implode(',', array_fill(0, count($selectedCategoryIds), '?'));
     $sql = "
@@ -104,6 +131,30 @@ if ($selectedCategoryIds) {
     }
     $stmt->execute();
     $categoryStats = $stmt->fetchAll();
+
+    $driveSql = "
+        SELECT m.category_id, m.drive_id, d.friendly_name AS drive_name,
+            COUNT(m.file_entry_id) AS item_count,
+            COALESCE(SUM(m.entry_type = 'file'), 0) AS file_count,
+            COALESCE(SUM(CASE WHEN ac.file_entry_id IS NULL AND (ic.file_entry_id IS NULL OR ? = 1) AND m.entry_type = 'file' THEN m.size_bytes ELSE 0 END), 0) AS planner_size
+        FROM ({$matchSql}) m
+        JOIN drives d ON d.id = m.drive_id
+        LEFT JOIN ({$activeConflictSql}) ac ON ac.file_entry_id = m.file_entry_id
+        LEFT JOIN ({$acceptedConflictSql}) ic ON ic.file_entry_id = m.file_entry_id
+        WHERE m.category_id IN ({$placeholders})
+        GROUP BY m.category_id, m.drive_id, d.friendly_name
+        HAVING planner_size > 0
+        ORDER BY m.category_id, planner_size DESC, d.friendly_name
+    ";
+    $stmt = db()->prepare($driveSql);
+    $stmt->bindValue(1, $includeAccepted ? 1 : 0, PDO::PARAM_INT);
+    foreach ($selectedCategoryIds as $index => $categoryId) {
+        $stmt->bindValue($index + 2, $categoryId, PDO::PARAM_INT);
+    }
+    $stmt->execute();
+    foreach ($stmt->fetchAll() as $row) {
+        $categoryDriveStats[(int)$row['category_id']][] = $row;
+    }
 }
 
 $uncategorised = ['planner_size' => 0, 'item_count' => 0, 'file_count' => 0, 'folder_count' => 0];
@@ -151,13 +202,11 @@ if ($runPlanner) {
     foreach ($categoryStats as $cat) {
         $size = (int)$cat['planner_size'];
         $categoryId = (int)$cat['category_id'];
-        $targetMode = 'Any selected drive';
-        if ($useCategoryTargets) {
-            $targetMode = 'Configured target drive';
-        }
+        $targetMode = $useCategoryTargets ? 'Configured target drive' : 'Any selected drive';
+        $currentDriveRows = $categoryDriveStats[$categoryId] ?? [];
 
         if ($size <= 0) {
-            $plannerRows[] = ['category' => $cat, 'status' => 'No planner data', 'target_mode' => $targetMode, 'targets' => []];
+            $plannerRows[] = ['category' => $cat, 'status' => 'No planner data', 'target_mode' => $targetMode, 'targets' => [], 'current_drives' => $currentDriveRows, 'already_on_target' => 0, 'move_size' => 0, 'move_status' => 'No move data'];
             continue;
         }
 
@@ -165,7 +214,7 @@ if ($runPlanner) {
         if ($useCategoryTargets) {
             $configured = array_values(array_filter($categoryTargets[$categoryId] ?? [], static fn(array $target): bool => isset($selectedDriveIdSet[(int)$target['drive_id']])));
             if (!$configured) {
-                $plannerRows[] = ['category' => $cat, 'status' => 'No enabled selected target drive', 'target_mode' => 'Configured target drive', 'targets' => []];
+                $plannerRows[] = ['category' => $cat, 'status' => 'No enabled selected target drive', 'target_mode' => 'Configured target drive', 'targets' => [], 'current_drives' => $currentDriveRows, 'already_on_target' => 0, 'move_size' => $size, 'move_status' => 'Blocked'];
                 continue;
             }
             $candidateDriveIds = array_map(static fn(array $target): int => (int)$target['drive_id'], $configured);
@@ -211,7 +260,18 @@ if ($runPlanner) {
                 $status = $useCategoryTargets ? 'No selected target drive fits' : 'No single drive fits';
             }
         }
-        $plannerRows[] = ['category' => $cat, 'status' => $status, 'target_mode' => $targetMode, 'targets' => $targets];
+
+        $targetDriveIds = mp_target_drive_ids($targets);
+        $alreadyOnTarget = min($size, mp_already_on_targets($currentDriveRows, $targetDriveIds));
+        $moveSize = max(0, $size - $alreadyOnTarget);
+        $moveStatus = match (true) {
+            $status !== 'Planned' => 'Blocked',
+            $moveSize === 0 => 'No move needed',
+            $allowSpanning && count($targets) > 1 => 'Split move estimate',
+            default => 'Move needed',
+        };
+
+        $plannerRows[] = ['category' => $cat, 'status' => $status, 'target_mode' => $targetMode, 'targets' => $targets, 'current_drives' => $currentDriveRows, 'already_on_target' => $alreadyOnTarget, 'move_size' => $moveSize, 'move_status' => $moveStatus];
     }
 }
 
@@ -260,12 +320,13 @@ render_header('Move Planner');
     <h2>Category sizes used for planning</h2>
     <div class="table-scroll">
         <table class="auto-table compact-table">
-            <thead><tr><th>Category</th><th>Items</th><th>Files</th><th>Raw size</th><th>Active conflict size excluded</th><th>Accepted conflict size</th><th>Planner size</th><th>Configured targets</th></tr></thead>
+            <thead><tr><th>Category</th><th>Current drives</th><th>Items</th><th>Files</th><th>Raw size</th><th>Active conflict size excluded</th><th>Accepted conflict size</th><th>Planner size</th><th>Configured targets</th></tr></thead>
             <tbody>
             <?php foreach ($categoryStats as $cat): ?>
                 <?php $color = mp_colour((string)$cat['color_hex']); $targetNames = array_map(static fn(array $target): string => $target['friendly_name'], $categoryTargets[(int)$cat['category_id']] ?? []); ?>
                 <tr>
                     <td><span class="category-badge" style="background-color: <?= e($color) ?>; border-color: <?= e($color) ?>"><?= e($cat['category_name']) ?></span></td>
+                    <td><?= e(mp_drive_summary($categoryDriveStats[(int)$cat['category_id']] ?? [])) ?></td>
                     <td><?= e(number_format((int)$cat['item_count'])) ?></td>
                     <td><?= e(number_format((int)$cat['file_count'])) ?></td>
                     <td><?= e(format_bytes((int)$cat['raw_size'])) ?></td>
@@ -276,9 +337,9 @@ render_header('Move Planner');
                 </tr>
             <?php endforeach; ?>
             <?php if ($includeUncategorised): ?>
-                <tr><td>Uncategorised holding group</td><td><?= e(number_format((int)$uncategorised['item_count'])) ?></td><td><?= e(number_format((int)$uncategorised['file_count'])) ?></td><td><?= e(format_bytes((int)$uncategorised['planner_size'])) ?></td><td>0 B</td><td>0 B</td><td><strong><?= e(format_bytes((int)$uncategorised['planner_size'])) ?></strong></td><td>Any selected drive</td></tr>
+                <tr><td>Uncategorised holding group</td><td>All current uncategorised drives</td><td><?= e(number_format((int)$uncategorised['item_count'])) ?></td><td><?= e(number_format((int)$uncategorised['file_count'])) ?></td><td><?= e(format_bytes((int)$uncategorised['planner_size'])) ?></td><td>0 B</td><td>0 B</td><td><strong><?= e(format_bytes((int)$uncategorised['planner_size'])) ?></strong></td><td>Any selected drive</td></tr>
             <?php endif; ?>
-            <?php if (!$categoryStats && !$includeUncategorised): ?><tr><td colspan="8">No selected category data found.</td></tr><?php endif; ?>
+            <?php if (!$categoryStats && !$includeUncategorised): ?><tr><td colspan="9">No selected category data found.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>
@@ -289,13 +350,14 @@ render_header('Move Planner');
     <h2>Proposed allocation</h2>
     <div class="table-scroll">
         <table class="auto-table compact-table">
-            <thead><tr><th>Category</th><th>Planner size</th><th>Target mode</th><th>Status</th><th>Target allocation</th></tr></thead>
+            <thead><tr><th>Category</th><th>Planner size</th><th>Current drives</th><th>Target mode</th><th>Status</th><th>Target allocation</th></tr></thead>
             <tbody>
             <?php foreach ($plannerRows as $row): ?>
                 <?php $cat = $row['category']; $color = mp_colour((string)$cat['color_hex']); ?>
                 <tr>
                     <td><span class="category-badge" style="background-color: <?= e($color) ?>; border-color: <?= e($color) ?>"><?= e($cat['category_name']) ?></span></td>
                     <td><?= e(format_bytes((int)$cat['planner_size'])) ?></td>
+                    <td><?= e(mp_drive_summary($row['current_drives'])) ?></td>
                     <td><?= e($row['target_mode']) ?></td>
                     <td><?= e($row['status']) ?></td>
                     <td>
@@ -306,7 +368,32 @@ render_header('Move Planner');
                     </td>
                 </tr>
             <?php endforeach; ?>
-            <?php if (!$plannerRows): ?><tr><td colspan="5">No allocation generated.</td></tr><?php endif; ?>
+            <?php if (!$plannerRows): ?><tr><td colspan="6">No allocation generated.</td></tr><?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Estimated move workload</h2>
+    <p class="muted">This compares where category data currently lives with the proposed target allocation. It is still an estimate; exact file-level move jobs come later.</p>
+    <div class="table-scroll">
+        <table class="auto-table compact-table">
+            <thead><tr><th>Category</th><th>Move status</th><th>Planner size</th><th>Already on target</th><th>Estimated move size</th><th>Active conflict excluded</th><th>Accepted conflict</th></tr></thead>
+            <tbody>
+            <?php foreach ($plannerRows as $row): ?>
+                <?php $cat = $row['category']; $color = mp_colour((string)$cat['color_hex']); ?>
+                <tr>
+                    <td><span class="category-badge" style="background-color: <?= e($color) ?>; border-color: <?= e($color) ?>"><?= e($cat['category_name']) ?></span></td>
+                    <td><?= e($row['move_status']) ?></td>
+                    <td><?= e(format_bytes((int)$cat['planner_size'])) ?></td>
+                    <td><?= e(format_bytes((int)$row['already_on_target'])) ?></td>
+                    <td><strong><?= e(format_bytes((int)$row['move_size'])) ?></strong></td>
+                    <td><?= e(format_bytes((int)$cat['active_conflict_size'])) ?></td>
+                    <td><?= e($includeAccepted ? 'Included: ' : 'Excluded: ') ?><?= e(format_bytes((int)$cat['accepted_conflict_size'])) ?></td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$plannerRows): ?><tr><td colspan="7">No move workload generated.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>
