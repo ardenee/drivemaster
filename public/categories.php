@@ -14,6 +14,11 @@ $ruleTypes = [
     'name_contains' => 'Name contains',
 ];
 
+function selected_int(string $key): int
+{
+    return max(0, (int)($_GET[$key] ?? 0));
+}
+
 try {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
@@ -94,6 +99,25 @@ try {
             header('Location: categories.php#rules');
             exit;
         }
+
+        if ($action === 'delete_manual_assignment') {
+            $stmt = db()->prepare('DELETE FROM category_manual_assignments WHERE id = ?');
+            $stmt->execute([(int)$_POST['id']]);
+            header('Location: categories.php#manual');
+            exit;
+        }
+
+        if ($action === 'delete_selected_manual_assignments') {
+            $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)($_POST['ids'] ?? ''))), static fn(int $id): bool => $id > 0)));
+            if (!$ids) {
+                throw new RuntimeException('No manual assignments selected.');
+            }
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $stmt = db()->prepare("DELETE FROM category_manual_assignments WHERE id IN ({$placeholders})");
+            $stmt->execute($ids);
+            header('Location: categories.php#manual');
+            exit;
+        }
     }
 } catch (Throwable $e) {
     $error = $e->getMessage();
@@ -113,10 +137,52 @@ if (isset($_GET['edit_rule'])) {
     $editRule = $stmt->fetch() ?: null;
 }
 
+$manualCategoryId = selected_int('manual_category_id');
+$manualDriveId = selected_int('manual_drive_id');
+$manualType = (string)($_GET['manual_type'] ?? 'all');
+if (!in_array($manualType, ['all', 'file', 'folder'], true)) {
+    $manualType = 'all';
+}
+$manualPath = trim((string)($_GET['manual_path'] ?? ''));
+$manualLimit = max(25, min(1000, (int)($_GET['manual_limit'] ?? 200)));
+
 $categories = db()->query('SELECT * FROM categories ORDER BY name')->fetchAll();
 $drives = db()->query('SELECT id, friendly_name FROM drives ORDER BY friendly_name')->fetchAll();
 $rules = db()->query('SELECT cr.*, c.name AS category_name, d.friendly_name AS drive_name FROM category_rules cr JOIN categories c ON c.id = cr.category_id LEFT JOIN drives d ON d.id = cr.drive_id ORDER BY c.name, cr.rule_type, cr.pattern')->fetchAll();
 $manualSummary = db()->query('SELECT c.id, c.name, COUNT(cma.id) AS assignment_count FROM categories c LEFT JOIN category_manual_assignments cma ON cma.category_id = c.id GROUP BY c.id, c.name ORDER BY c.name')->fetchAll();
+
+$manualWhere = ['1=1'];
+$manualParams = [];
+if ($manualCategoryId > 0) {
+    $manualWhere[] = 'cma.category_id = ?';
+    $manualParams[] = $manualCategoryId;
+}
+if ($manualDriveId > 0) {
+    $manualWhere[] = '(cma.drive_id = ? OR fe.drive_id = ?)';
+    $manualParams[] = $manualDriveId;
+    $manualParams[] = $manualDriveId;
+}
+if ($manualType !== 'all') {
+    $manualWhere[] = 'cma.assignment_type = ?';
+    $manualParams[] = $manualType;
+}
+if ($manualPath !== '') {
+    $manualWhere[] = '(cma.path_prefix LIKE ? OR fe.relative_path LIKE ? OR fe.name LIKE ?)';
+    $manualParams[] = '%' . $manualPath . '%';
+    $manualParams[] = '%' . $manualPath . '%';
+    $manualParams[] = '%' . $manualPath . '%';
+}
+$manualWhereSql = implode(' AND ', $manualWhere);
+$manualCountStmt = db()->prepare("SELECT COUNT(*) FROM category_manual_assignments cma JOIN categories c ON c.id = cma.category_id LEFT JOIN file_entries fe ON fe.id = cma.file_entry_id LEFT JOIN drives d1 ON d1.id = cma.drive_id LEFT JOIN drives d2 ON d2.id = fe.drive_id WHERE {$manualWhereSql}");
+$manualCountStmt->execute($manualParams);
+$manualTotal = (int)$manualCountStmt->fetchColumn();
+$manualStmt = db()->prepare("SELECT cma.*, c.name AS category_name, COALESCE(d1.friendly_name, d2.friendly_name) AS drive_name, fe.relative_path AS file_relative_path, fe.name AS file_name FROM category_manual_assignments cma JOIN categories c ON c.id = cma.category_id LEFT JOIN file_entries fe ON fe.id = cma.file_entry_id LEFT JOIN drives d1 ON d1.id = cma.drive_id LEFT JOIN drives d2 ON d2.id = fe.drive_id WHERE {$manualWhereSql} ORDER BY c.name, COALESCE(d1.friendly_name, d2.friendly_name), COALESCE(cma.path_prefix, fe.relative_path) LIMIT ?");
+foreach ($manualParams as $index => $value) {
+    $manualStmt->bindValue($index + 1, $value);
+}
+$manualStmt->bindValue(count($manualParams) + 1, $manualLimit, PDO::PARAM_INT);
+$manualStmt->execute();
+$manualAssignments = $manualStmt->fetchAll();
 
 render_header('Categories');
 ?>
@@ -225,4 +291,100 @@ render_header('Categories');
         </table>
     </div>
 </div>
+
+<div class="card" id="manual">
+    <h2>Manual assignments</h2>
+    <p class="muted">These are explicit category choices made from the file explorer. They remain active even when optional category rules are disabled.</p>
+    <form method="get">
+        <div class="form-grid compact-search">
+            <label>Category
+                <select name="manual_category_id">
+                    <option value="0">All categories</option>
+                    <?php foreach ($categories as $category): ?>
+                        <option value="<?= e((string)$category['id']) ?>" <?= $manualCategoryId === (int)$category['id'] ? 'selected' : '' ?>><?= e($category['name']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
+            <label>Drive
+                <select name="manual_drive_id">
+                    <option value="0">All drives</option>
+                    <?php foreach ($drives as $drive): ?>
+                        <option value="<?= e((string)$drive['id']) ?>" <?= $manualDriveId === (int)$drive['id'] ? 'selected' : '' ?>><?= e($drive['friendly_name']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
+            <label>Type
+                <select name="manual_type">
+                    <option value="all" <?= $manualType === 'all' ? 'selected' : '' ?>>Files and folders</option>
+                    <option value="file" <?= $manualType === 'file' ? 'selected' : '' ?>>Files only</option>
+                    <option value="folder" <?= $manualType === 'folder' ? 'selected' : '' ?>>Folders only</option>
+                </select>
+            </label>
+            <label>Limit
+                <select name="manual_limit">
+                    <?php foreach ([25, 50, 100, 200, 500, 1000] as $limitOption): ?>
+                        <option value="<?= e((string)$limitOption) ?>" <?= $manualLimit === $limitOption ? 'selected' : '' ?>><?= e((string)$limitOption) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
+            <label class="wide">Path/name contains <input type="text" name="manual_path" value="<?= e($manualPath) ?>"></label>
+        </div>
+        <div class="button-row"><button type="submit">Filter assignments</button> <a class="button" href="categories.php#manual">Clear</a></div>
+    </form>
+
+    <div class="button-row">
+        <form method="post" id="manual-delete-selected-form" onsubmit="return prepareManualAssignmentDelete();"><input type="hidden" name="action" value="delete_selected_manual_assignments"><input type="hidden" name="ids" id="selected-manual-assignment-ids"><button class="danger" type="submit">Delete selected</button></form>
+    </div>
+
+    <p class="muted">Showing <?= e(number_format(count($manualAssignments))) ?> of <?= e(number_format($manualTotal)) ?> matching manual assignments.</p>
+    <div class="table-scroll">
+        <table class="auto-table compact-table selectable-table" data-status-target="manual-assignment-status">
+            <thead><tr><th>Select</th><th>Category</th><th>Type</th><th>Drive</th><th>Path / file</th><th>Created</th><th>Actions</th></tr></thead>
+            <tbody>
+            <?php foreach ($manualAssignments as $assignment): ?>
+                <?php $path = $assignment['assignment_type'] === 'folder' ? (string)$assignment['path_prefix'] : (string)($assignment['file_relative_path'] ?? $assignment['file_name'] ?? ''); ?>
+                <tr class="selectable-row">
+                    <td><input type="checkbox" class="manual-assignment-check" value="<?= e((string)$assignment['id']) ?>"></td>
+                    <td><?= e($assignment['category_name']) ?></td>
+                    <td><?= e($assignment['assignment_type']) ?></td>
+                    <td><?= e($assignment['drive_name'] ?? '') ?></td>
+                    <td class="wrap-cell path-cell"><?= e($path) ?></td>
+                    <td><?= e($assignment['created_at']) ?></td>
+                    <td class="actions"><form method="post" onsubmit="return confirm('Delete this manual assignment?');"><input type="hidden" name="action" value="delete_manual_assignment"><input type="hidden" name="id" value="<?= e((string)$assignment['id']) ?>"><button class="danger" type="submit">Delete</button></form></td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$manualAssignments): ?><tr><td colspan="7">No manual assignments found.</td></tr><?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+    <div class="status-bar" id="manual-assignment-status">Selected: 0</div>
+</div>
+
+<script>
+function updateManualAssignmentStatus() {
+    const count = document.querySelectorAll('.manual-assignment-check:checked').length;
+    const status = document.getElementById('manual-assignment-status');
+    if (status) {
+        status.textContent = 'Selected: ' + count;
+    }
+}
+
+function prepareManualAssignmentDelete() {
+    const ids = Array.from(document.querySelectorAll('.manual-assignment-check:checked')).map(function (checkbox) { return checkbox.value; });
+    if (ids.length === 0) {
+        alert('No manual assignments selected.');
+        return false;
+    }
+    if (!confirm('Delete selected manual assignments?')) {
+        return false;
+    }
+    document.getElementById('selected-manual-assignment-ids').value = ids.join(',');
+    return true;
+}
+
+document.querySelectorAll('.manual-assignment-check').forEach(function (checkbox) {
+    checkbox.addEventListener('change', updateManualAssignmentStatus);
+});
+updateManualAssignmentStatus();
+</script>
 <?php render_footer(); ?>
