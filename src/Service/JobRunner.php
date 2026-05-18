@@ -166,16 +166,52 @@ final class JobRunner
         $this->throwIfCancelled($jobId);
         $this->jobs->progress($jobId, 0, $total, 'Starting dry-run for move plan #' . $planId);
 
-        $itemStmt = $this->db->prepare("SELECT mpi.id, mpi.relative_path, mpi.size_bytes, sd.friendly_name AS source_drive_name, td.friendly_name AS target_drive_name FROM move_plan_items mpi JOIN drives sd ON sd.id = mpi.source_drive_id JOIN drives td ON td.id = mpi.target_drive_id WHERE mpi.move_plan_id = ? AND mpi.status = 'validated' ORDER BY mpi.id");
+        $itemStmt = $this->db->prepare("SELECT mpi.id, mpi.relative_path, mpi.size_bytes, f.full_path AS source_full_path, sd.friendly_name AS source_drive_name, td.friendly_name AS target_drive_name, td.mount_path AS target_mount_path FROM move_plan_items mpi JOIN file_entries f ON f.id = mpi.file_entry_id JOIN drives sd ON sd.id = mpi.source_drive_id JOIN drives td ON td.id = mpi.target_drive_id WHERE mpi.move_plan_id = ? AND mpi.status = 'validated' ORDER BY mpi.id");
         $itemStmt->execute([$planId]);
 
         $checked = 0;
         $bytes = 0;
+        $sourceMissing = 0;
+        $targetMountMissing = 0;
+        $targetAlreadyExists = 0;
+        $sampleIssues = [];
         $lastUpdateAt = 0.0;
+
         while ($item = $itemStmt->fetch()) {
             $this->throwIfCancelled($jobId);
             $checked++;
             $bytes += (int)$item['size_bytes'];
+            $issues = [];
+
+            $sourcePath = (string)($item['source_full_path'] ?? '');
+            if ($sourcePath === '' || !is_file($sourcePath)) {
+                $sourceMissing++;
+                $issues[] = 'source missing on disk';
+            }
+
+            $targetMount = rtrim((string)($item['target_mount_path'] ?? ''), "/\\");
+            if ($targetMount === '' || !is_dir($targetMount)) {
+                $targetMountMissing++;
+                $issues[] = 'target mount path unavailable';
+            } else {
+                $relativePath = ltrim(str_replace('\\', '/', (string)$item['relative_path']), '/');
+                $targetPath = $targetMount . '/' . $relativePath;
+                if (file_exists($targetPath)) {
+                    $targetAlreadyExists++;
+                    $issues[] = 'target path already exists';
+                }
+            }
+
+            if ($issues && count($sampleIssues) < 25) {
+                $sampleIssues[] = [
+                    'item_id' => (int)$item['id'],
+                    'source_drive' => (string)$item['source_drive_name'],
+                    'target_drive' => (string)$item['target_drive_name'],
+                    'relative_path' => (string)$item['relative_path'],
+                    'issues' => $issues,
+                ];
+            }
+
             $now = microtime(true);
             if (($now - $lastUpdateAt) >= 0.75 || ($checked % 500) === 0 || $checked === $total) {
                 $lastUpdateAt = $now;
@@ -183,11 +219,17 @@ final class JobRunner
             }
         }
 
+        $issueCount = $sourceMissing + $targetMountMissing + $targetAlreadyExists;
         $this->jobs->complete($jobId, [
             'move_plan_id' => $planId,
             'items_checked' => $checked,
             'bytes_checked' => $bytes,
             'dry_run_only' => true,
+            'source_missing' => $sourceMissing,
+            'target_mount_missing' => $targetMountMissing,
+            'target_already_exists' => $targetAlreadyExists,
+            'issue_count' => $issueCount,
+            'sample_issues' => $sampleIssues,
             'progress_current' => $checked,
             'progress_total' => $total,
         ]);
