@@ -5,7 +5,7 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 require __DIR__ . '/_layout.php';
 
-const CATEGORY_PREVIEW_PAGE_SIZE = 495;
+const CATEGORY_PREVIEW_PAGE_SIZE = 990;
 
 function cp_link(array $params = []): string
 {
