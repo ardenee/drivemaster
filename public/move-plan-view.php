@@ -258,6 +258,7 @@ $statusSummary = $statusStmt->fetchAll();
     <div class="button-row">
         <a class="button" href="move-plans.php">Saved Plans</a>
         <a class="button" href="move-planner.php">Move Planner</a>
+        <a class="button" href="move-plan-dry-runs.php?id=<?= e((string)$plan['id']) ?>">Dry-run Reports</a>
         <?php if ($plan['status'] !== 'archived'): ?>
             <form method="post" style="display:inline" onsubmit="return confirm('Validate this saved plan snapshot? This updates saved item statuses only.');">
                 <input type="hidden" name="action" value="validate_plan">
