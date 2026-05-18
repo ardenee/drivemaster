@@ -98,7 +98,7 @@ render_header('Saved Move Plans');
             <tbody>
             <?php foreach ($plans as $plan): ?>
                 <tr>
-                    <td><?= e((string)$plan['id']) ?></td>
+                    <td><a href="move-plan-view.php?id=<?= e((string)$plan['id']) ?>"><?= e((string)$plan['id']) ?></a></td>
                     <td><?= e($plan['status']) ?></td>
                     <td><?= e($plan['created_at']) ?></td>
                     <td><?= e(number_format(mp_json_count($plan['selected_category_ids_json'] ?? null))) ?></td>
@@ -109,6 +109,7 @@ render_header('Saved Move Plans');
                     <td><?= e(number_format(mp_json_warning_count($plan['warning_summary_json'] ?? null))) ?></td>
                     <td><?= e(number_format(mp_json_warning_count($plan['blocker_summary_json'] ?? null))) ?></td>
                     <td class="actions">
+                        <a class="button" href="move-plan-view.php?id=<?= e((string)$plan['id']) ?>">View</a>
                         <?php if ($plan['status'] !== 'archived'): ?>
                             <form method="post" style="display:inline"><input type="hidden" name="action" value="archive_plan"><input type="hidden" name="id" value="<?= e((string)$plan['id']) ?>"><button type="submit">Archive</button></form>
                         <?php endif; ?>
