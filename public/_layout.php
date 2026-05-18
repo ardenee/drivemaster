@@ -36,6 +36,7 @@ function render_header(string $title): void
             <span class="nav-dropdown-menu">
                 <a href="planner-readiness.php">Planner Readiness</a>
                 <a href="move-planner.php">Move Planner</a>
+                <a href="move-candidates.php">Move Candidates</a>
             </span>
         </span>
         <a href="errors.php">Errors</a>
