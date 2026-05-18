@@ -376,6 +376,51 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function openDriveContextMenu(row, event) {
+        const driveMenu = document.getElementById('drive-context-menu');
+        const menu = document.getElementById('context-menu');
+        if (!driveMenu) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        driveMenu.dataset.driveId = row.dataset.driveId || '';
+        driveMenu.style.left = event.pageX + 'px';
+        driveMenu.style.top = event.pageY + 'px';
+        driveMenu.classList.add('visible');
+        if (menu) {
+            menu.classList.remove('visible');
+        }
+    }
+
+    function openDriveRemoveDialog(driveId) {
+        const dialog = document.getElementById('context-dialog');
+        const actionInput = document.getElementById('context-action-input');
+        const selectedInput = document.getElementById('context-selected-ids');
+        const driveInput = document.getElementById('context-drive-id');
+        const title = document.getElementById('context-dialog-title');
+        const note = document.getElementById('context-dialog-note');
+        if (!dialog || !actionInput || !selectedInput || !driveInput) {
+            return;
+        }
+        actionInput.value = 'remove_drive';
+        selectedInput.value = '1';
+        driveInput.value = driveId;
+        ['context-category-area', 'context-move-area', 'context-rename-area'].forEach(function (id) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.style.display = 'none';
+            }
+        });
+        if (title) {
+            title.textContent = 'Remove drive from DB';
+        }
+        if (note) {
+            note.textContent = 'This removes the drive record, file inventory, scan runs, and related scan jobs from the database. It does not delete files from disk.';
+        }
+        dialog.classList.remove('hidden');
+    }
+
     function addLazyTreeHandlers() {
         normaliseServerTreeRows();
         addTreeControls();
@@ -405,6 +450,42 @@ document.addEventListener('DOMContentLoaded', function () {
                 loadTreeChildren(row, false);
             }
         }, true);
+        sidebar.addEventListener('dblclick', function (event) {
+            const row = event.target.closest('.tree-drive,.tree-folder');
+            if (!row || event.target.closest('.tree-toggle')) {
+                return;
+            }
+            event.preventDefault();
+            if (row.dataset.url) {
+                window.location.href = row.dataset.url;
+            }
+        }, true);
+        sidebar.addEventListener('contextmenu', function (event) {
+            const row = event.target.closest('.tree-drive');
+            if (!row) {
+                return;
+            }
+            openDriveContextMenu(row, event);
+        }, true);
+
+        const driveMenu = document.getElementById('drive-context-menu');
+        if (driveMenu && driveMenu.dataset.delegatedClickAdded !== '1') {
+            driveMenu.dataset.delegatedClickAdded = '1';
+            driveMenu.addEventListener('click', function (event) {
+                const button = event.target.closest('[data-drive-action="remove_drive"]');
+                if (!button) {
+                    return;
+                }
+                const driveId = driveMenu.dataset.driveId || '';
+                if (!driveId) {
+                    return;
+                }
+                event.preventDefault();
+                event.stopPropagation();
+                driveMenu.classList.remove('visible');
+                openDriveRemoveDialog(driveId);
+            });
+        }
     }
 
     function addDriveStatusInfo() {
@@ -414,22 +495,37 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
         status.dataset.driveInfoAdded = '1';
+        let rendering = false;
+        const renderStatus = function () {
+            if (rendering) {
+                return;
+            }
+            const driveInfo = status.dataset.driveInfoText || '';
+            if (!driveInfo) {
+                return;
+            }
+            rendering = true;
+            const currentText = status.textContent.replace(status.dataset.driveInfoPlain || '', '').trim();
+            status.innerHTML = '<span class="status-left"></span><span class="status-right"></span>';
+            status.querySelector('.status-left').textContent = currentText;
+            status.querySelector('.status-right').textContent = driveInfo;
+            rendering = false;
+        };
         fetch('files-drive-info.php?drive_id=' + encodeURIComponent(selectedDrive.dataset.driveId), { cache: 'no-store' })
             .then(function (response) { return response.json(); })
             .then(function (data) {
                 if (!data.ok || !data.drive) {
                     return;
                 }
-                const text = ' | Drive: ' + data.drive.friendly_name + ' | Total: ' + formatBytesLocal(data.drive.total_bytes) + ' | Free: ' + formatBytesLocal(data.drive.free_bytes) + ' | Used: ' + formatBytesLocal(data.drive.used_bytes);
-                status.dataset.driveInfoText = text;
-                const appendInfo = function () {
-                    const info = status.dataset.driveInfoText || '';
-                    if (info && !status.textContent.includes(' | Drive: ')) {
-                        status.textContent += info;
+                const plain = 'Drive: ' + data.drive.friendly_name + ' | Total: ' + formatBytesLocal(data.drive.total_bytes) + ' | Free: ' + formatBytesLocal(data.drive.free_bytes) + ' | Used: ' + formatBytesLocal(data.drive.used_bytes);
+                status.dataset.driveInfoPlain = plain;
+                status.dataset.driveInfoText = plain;
+                renderStatus();
+                const observer = new MutationObserver(function () {
+                    if (!rendering && !status.querySelector('.status-right')) {
+                        renderStatus();
                     }
-                };
-                appendInfo();
-                const observer = new MutationObserver(appendInfo);
+                });
                 observer.observe(status, { childList: true, characterData: true, subtree: true });
             })
             .catch(function () {});
