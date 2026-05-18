@@ -29,6 +29,7 @@ function render_header(string $title): void
                 <a href="category-conflicts.php">Conflicts</a>
             </span>
         </span>
+        <a href="planner-readiness.php">Planner Readiness</a>
         <a href="errors.php">Errors</a>
         <a href="health.php">Health</a>
     </nav>
