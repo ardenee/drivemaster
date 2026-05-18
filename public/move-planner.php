@@ -14,7 +14,7 @@ function mp_colour(string $value): string
 
 function mp_selected_ids(string $key): array
 {
-    $raw = $_GET[$key] ?? [];
+    $raw = $_REQUEST[$key] ?? [];
     if (!is_array($raw)) {
         $raw = [$raw];
     }
@@ -62,13 +62,102 @@ function mp_candidate_links(array $row, bool $includeAccepted): string
     return $links ? implode(' ', $links) : '';
 }
 
+function mp_json(array $data): string
+{
+    return json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+}
+
+function mp_save_plan_snapshot(array $plannerRows, array $selectedCategoryIds, array $selectedDriveIds, array $options, array $plannerErrors): int
+{
+    if (!empty($options['allow_spanning'])) {
+        throw new RuntimeException('Plan snapshots for spanning plans are not enabled yet. Preview is allowed, but saving would be misleading until file-level split allocation exists.');
+    }
+
+    $matchSql = CategoryMatchSql::matchSql();
+    $activeConflictSql = CategoryMatchSql::activeConflictSql();
+    $acceptedConflictSql = CategoryMatchSql::acceptedConflictSql();
+    $db = db();
+    $blockedRows = [];
+    $candidateCount = 0;
+    $totalSize = 0;
+
+    $db->beginTransaction();
+    try {
+        foreach ($plannerRows as $row) {
+            if (($row['status'] ?? '') !== 'Planned' && ($row['move_status'] ?? '') !== 'No move needed') {
+                $blockedRows[] = [
+                    'category_id' => (int)$row['category']['category_id'],
+                    'category_name' => (string)$row['category']['category_name'],
+                    'status' => (string)$row['status'],
+                    'move_status' => (string)$row['move_status'],
+                ];
+            }
+        }
+
+        $status = $blockedRows ? 'blocked' : 'draft';
+        $insertPlan = $db->prepare('INSERT INTO move_plans (status, selected_category_ids_json, selected_drive_ids_json, options_json, warning_summary_json, blocker_summary_json) VALUES (?, ?, ?, ?, ?, ?)');
+        $insertPlan->execute([
+            $status,
+            mp_json(array_values($selectedCategoryIds)),
+            mp_json(array_values($selectedDriveIds)),
+            mp_json($options),
+            mp_json(array_values($plannerErrors)),
+            mp_json($blockedRows),
+        ]);
+        $planId = (int)$db->lastInsertId();
+
+        $candidateSql = "
+            SELECT m.category_id, f.id AS file_entry_id, f.drive_id AS source_drive_id, f.entry_type, f.size_bytes, f.relative_path
+            FROM ({$matchSql}) m
+            JOIN file_entries f ON f.id = m.file_entry_id
+            LEFT JOIN ({$activeConflictSql}) ac ON ac.file_entry_id = f.id
+            LEFT JOIN ({$acceptedConflictSql}) ic ON ic.file_entry_id = f.id
+            WHERE m.category_id = ?
+                AND f.drive_id <> ?
+                AND f.entry_type = 'file'
+                AND ac.file_entry_id IS NULL
+                AND (ic.file_entry_id IS NULL OR ? = 1)
+            ORDER BY f.drive_id, f.relative_path
+        ";
+        $candidateStmt = $db->prepare($candidateSql);
+        $insertItem = $db->prepare('INSERT INTO move_plan_items (move_plan_id, category_id, file_entry_id, source_drive_id, target_drive_id, entry_type, size_bytes, relative_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+
+        foreach ($plannerRows as $row) {
+            if (($row['status'] ?? '') !== 'Planned' || count($row['targets'] ?? []) !== 1) {
+                continue;
+            }
+            $categoryId = (int)$row['category']['category_id'];
+            $targetDriveId = (int)$row['targets'][0]['drive']['id'];
+            $candidateStmt->execute([$categoryId, $targetDriveId, !empty($options['include_accepted']) ? 1 : 0]);
+            foreach ($candidateStmt->fetchAll() as $item) {
+                $size = (int)$item['size_bytes'];
+                $insertItem->execute([$planId, $categoryId, (int)$item['file_entry_id'], (int)$item['source_drive_id'], $targetDriveId, (string)$item['entry_type'], $size, (string)$item['relative_path'], 'planned']);
+                $candidateCount++;
+                $totalSize += $size;
+            }
+        }
+
+        $updatePlan = $db->prepare('UPDATE move_plans SET candidate_count = ?, total_size_bytes = ? WHERE id = ?');
+        $updatePlan->execute([$candidateCount, $totalSize, $planId]);
+        $db->commit();
+        return $planId;
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+        throw $e;
+    }
+}
+
+$action = (string)($_POST['action'] ?? '');
 $selectedCategoryIds = mp_selected_ids('category_ids');
 $selectedDriveIds = mp_selected_ids('drive_ids');
-$allowSpanning = isset($_GET['allow_spanning']);
-$includeAccepted = isset($_GET['include_accepted']);
-$includeUncategorised = isset($_GET['include_uncategorised']);
-$useCategoryTargets = isset($_GET['use_category_targets']);
-$runPlanner = isset($_GET['plan']);
+$allowSpanning = isset($_REQUEST['allow_spanning']);
+$includeAccepted = isset($_REQUEST['include_accepted']);
+$includeUncategorised = isset($_REQUEST['include_uncategorised']);
+$useCategoryTargets = isset($_REQUEST['use_category_targets']);
+$runPlanner = isset($_REQUEST['plan']) || $action === 'save_plan_snapshot';
+$saveError = null;
 
 $categories = db()->query('SELECT id, name, color_hex FROM categories WHERE is_active = 1 ORDER BY name')->fetchAll();
 $drives = db()->query('SELECT id, friendly_name, form_factor, free_bytes, total_bytes, serial_number, identity_source FROM drives WHERE is_active = 1 ORDER BY friendly_name')->fetchAll();
@@ -269,8 +358,24 @@ if ($runPlanner) {
     }
 }
 
+if ($action === 'save_plan_snapshot') {
+    try {
+        $planId = mp_save_plan_snapshot($plannerRows, $selectedCategoryIds, $selectedDriveIds, [
+            'use_category_targets' => $useCategoryTargets,
+            'allow_spanning' => $allowSpanning,
+            'include_accepted' => $includeAccepted,
+            'include_uncategorised' => $includeUncategorised,
+        ], $plannerErrors);
+        header('Location: move-plans.php?saved=' . $planId);
+        exit;
+    } catch (Throwable $e) {
+        $saveError = $e->getMessage();
+    }
+}
+
 render_header('Move Planner');
 ?>
+<?php if ($saveError): ?><div class="card"><strong>Snapshot not saved:</strong> <?= e($saveError) ?></div><?php endif; ?>
 <div class="card">
     <h2>Read-only move planner</h2>
     <p class="muted">This is a planning preview only. It does not queue jobs and does not move files.</p>
@@ -296,7 +401,7 @@ render_header('Move Planner');
             <label><input type="checkbox" name="include_accepted" value="1" <?= $includeAccepted ? 'checked' : '' ?>> Include accepted conflicts in planner size</label>
             <label><input type="checkbox" name="include_uncategorised" value="1" <?= $includeUncategorised ? 'checked' : '' ?>> Include uncategorised inventory as a holding group</label>
         </div>
-        <div class="button-row"><button type="submit">Preview plan</button> <a class="button" href="move-planner.php">Reset</a> <a class="button" href="planner-readiness.php">Readiness</a> <a class="button" href="category-targets.php">Target Drives</a></div>
+        <div class="button-row"><button type="submit">Preview plan</button> <a class="button" href="move-planner.php">Reset</a> <a class="button" href="planner-readiness.php">Readiness</a> <a class="button" href="category-targets.php">Target Drives</a> <a class="button" href="move-plans.php">Saved Plans</a></div>
     </form>
 </div>
 
@@ -392,6 +497,25 @@ render_header('Move Planner');
             </tbody>
         </table>
     </div>
+</div>
+
+<div class="card">
+    <h2>Save read-only snapshot</h2>
+    <p class="muted">This stores exact file-level candidates for the current non-spanning plan. It still does not queue jobs or move files.</p>
+    <?php if ($allowSpanning): ?>
+        <p>Spanning plans can be previewed, but saving them is disabled until exact file-level split allocation is added.</p>
+    <?php else: ?>
+        <form method="post" onsubmit="return confirm('Save this read-only move plan snapshot?');">
+            <input type="hidden" name="action" value="save_plan_snapshot">
+            <input type="hidden" name="plan" value="1">
+            <?php foreach ($selectedCategoryIds as $categoryId): ?><input type="hidden" name="category_ids[]" value="<?= e((string)$categoryId) ?>"><?php endforeach; ?>
+            <?php foreach ($selectedDriveIds as $driveId): ?><input type="hidden" name="drive_ids[]" value="<?= e((string)$driveId) ?>"><?php endforeach; ?>
+            <?php if ($useCategoryTargets): ?><input type="hidden" name="use_category_targets" value="1"><?php endif; ?>
+            <?php if ($includeAccepted): ?><input type="hidden" name="include_accepted" value="1"><?php endif; ?>
+            <?php if ($includeUncategorised): ?><input type="hidden" name="include_uncategorised" value="1"><?php endif; ?>
+            <button type="submit">Save plan snapshot</button>
+        </form>
+    <?php endif; ?>
 </div>
 
 <div class="card">
