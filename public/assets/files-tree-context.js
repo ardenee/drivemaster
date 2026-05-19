@@ -290,9 +290,51 @@ document.addEventListener('DOMContentLoaded', function () {
         removeDriveDescendants(driveRow);
     }
 
+    function showNavigationNotice(row) {
+        if (!row || !row.dataset.url) {
+            return;
+        }
+        showTreeToast('Opening folder. Loading files...');
+        const toggle = row.querySelector('.tree-toggle');
+        if (toggle) {
+            toggle.textContent = '…';
+        }
+    }
+
     ensureTreeToast();
     installTreeFetchNotice();
     ensureDriveMenuActions();
+
+    sidebar.addEventListener('click', function (event) {
+        const row = event.target.closest('.tree-drive,.tree-folder');
+        if (!row || event.target.closest('.tree-toggle')) {
+            return;
+        }
+        showNavigationNotice(row);
+    }, true);
+
+    sidebar.addEventListener('dblclick', function (event) {
+        const row = event.target.closest('.tree-drive,.tree-folder');
+        if (!row || event.target.closest('.tree-toggle')) {
+            return;
+        }
+        showNavigationNotice(row);
+    }, true);
+
+    document.addEventListener('click', function (event) {
+        const link = event.target.closest('a[href*="files.php"], a[href^="?drive_id"], a[href*="drive_id="]');
+        if (!link) {
+            return;
+        }
+        if (link.closest('.context-menu') || link.target === '_blank') {
+            return;
+        }
+        showTreeToast('Loading files...');
+    }, true);
+
+    window.addEventListener('beforeunload', function () {
+        showTreeToast('Loading...');
+    });
 
     sidebar.addEventListener('contextmenu', function (event) {
         const folder = event.target.closest('.tree-folder');
