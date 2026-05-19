@@ -7,6 +7,7 @@ require __DIR__ . '/_layout.php';
 
 use DriveMaster\Repository\DriveRepository;
 use DriveMaster\Repository\JobRepository;
+use DriveMaster\Support\IgnoredFolderSql;
 
 const EXPLORER_PAGE_SIZE = 495;
 const SEARCH_PAGE_SIZE = 495;
@@ -26,9 +27,10 @@ function fp_parent(string $path): string
     return implode('/', $parts);
 }
 
-function fp_parent_expr(): string
+function fp_parent_expr(string $alias = ''): string
 {
-    return "CASE WHEN LOCATE('/', relative_path) = 0 THEN '' ELSE SUBSTRING(relative_path, 1, LENGTH(relative_path) - LENGTH(SUBSTRING_INDEX(relative_path, '/', -1)) - 1) END";
+    $path = $alias === '' ? 'relative_path' : $alias . '.relative_path';
+    return "CASE WHEN LOCATE('/', {$path}) = 0 THEN '' ELSE SUBSTRING({$path}, 1, LENGTH({$path}) - LENGTH(SUBSTRING_INDEX({$path}, '/', -1)) - 1) END";
 }
 
 function fp_link(array $params = [], bool $explorer = false): string
@@ -51,6 +53,21 @@ function fp_selected_ids(): array
     return array_values(array_unique(array_filter(array_map('intval', explode(',', $raw)), static fn(int $id): bool => $id > 0)));
 }
 
+function fp_assert_not_ignored(array $selectedIds): void
+{
+    $selectedIds = array_values(array_unique(array_filter(array_map('intval', $selectedIds), static fn(int $id): bool => $id > 0)));
+    if (!$selectedIds) {
+        return;
+    }
+    $placeholders = implode(',', array_fill(0, count($selectedIds), '?'));
+    $visibleSql = IgnoredFolderSql::excludeCondition('f');
+    $stmt = db()->prepare("SELECT COUNT(*) FROM file_entries f WHERE f.id IN ({$placeholders}) AND {$visibleSql}");
+    $stmt->execute($selectedIds);
+    if ((int)$stmt->fetchColumn() !== count($selectedIds)) {
+        throw new RuntimeException('Selected item is inside an ignored folder and cannot be searched, categorised, moved, renamed, or deleted from this workflow.');
+    }
+}
+
 function fp_highlight(?string $value, array $terms): string
 {
     $out = e($value ?? '');
@@ -66,8 +83,9 @@ function fp_highlight(?string $value, array $terms): string
 
 function fp_folder_children(int $driveId, string $parentPath): array
 {
-    $expr = fp_parent_expr();
-    $stmt = db()->prepare("SELECT id, name, relative_path FROM file_entries WHERE drive_id = ? AND is_missing = 0 AND entry_type = 'folder' AND {$expr} = ? ORDER BY name ASC LIMIT " . TREE_CHILD_LIMIT);
+    $expr = fp_parent_expr('f');
+    $visibleSql = IgnoredFolderSql::excludeCondition('f');
+    $stmt = db()->prepare("SELECT f.id, f.name, f.relative_path FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND f.entry_type = 'folder' AND {$visibleSql} AND {$expr} = ? ORDER BY f.name ASC LIMIT " . TREE_CHILD_LIMIT);
     $stmt->execute([$driveId, $parentPath]);
     return $stmt->fetchAll();
 }
@@ -87,7 +105,7 @@ function fp_render_tree(int $driveId, string $parentPath, string $activePath, in
         $isActive = $folderPath === $activePath;
         $padding = 18 + ($level * 18);
         ?>
-        <div class="tree-folder <?= $isActive ? 'selected selected-row' : '' ?>" style="padding-left: <?= e((string)$padding) ?>px" data-url="<?= e(fp_link(['drive_id' => $driveId, 'path' => $folderPath, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null, 'explorer_page' => 1], true)) ?>">
+        <div class="tree-folder selectable-row <?= $isActive ? 'selected selected-row' : '' ?>" style="padding-left: <?= e((string)$padding) ?>px" data-id="<?= e((string)$folder['id']) ?>" data-entry-type="folder" data-entry-name="<?= e((string)$folder['name']) ?>" data-size="0" data-is-file="0" data-drive-id="<?= e((string)$driveId) ?>" data-path="<?= e($folderPath) ?>" data-level="<?= e((string)$level) ?>" data-url="<?= e(fp_link(['drive_id' => $driveId, 'path' => $folderPath, 'expanded_drive_id' => $driveId, 'selected_entry_id' => null, 'explorer_page' => 1], true)) ?>">
             <span class="tree-toggle"><?= $isOpen ? '▾' : '▸' ?></span><span class="folder-icon">📁</span> <?= e((string)$folder['name']) ?>
         </div>
         <?php
@@ -142,12 +160,14 @@ function fp_load_category_badges(array $entryIds): array
     }
 
     $placeholders = implode(',', array_fill(0, count($entryIds), '?'));
+    $visibleSql = IgnoredFolderSql::excludeCondition('f');
     $sql = "
         SELECT f.id AS file_entry_id, c.name AS category_name, 'manual' AS source
         FROM file_entries f
         JOIN category_manual_assignments cma ON cma.category_id IS NOT NULL
         JOIN categories c ON c.id = cma.category_id AND c.is_active = 1
         WHERE f.id IN ({$placeholders})
+        AND {$visibleSql}
         AND (cma.file_entry_id = f.id OR (cma.assignment_type = 'folder' AND cma.drive_id = f.drive_id AND cma.path_prefix IS NOT NULL AND (f.relative_path = cma.path_prefix OR f.relative_path LIKE CONCAT(cma.path_prefix, '/%'))))
         UNION ALL
         SELECT f.id AS file_entry_id, c.name AS category_name, 'rule' AS source
@@ -155,6 +175,7 @@ function fp_load_category_badges(array $entryIds): array
         JOIN category_rules cr ON cr.is_enabled = 1 AND (cr.drive_id IS NULL OR cr.drive_id = f.drive_id)
         JOIN categories c ON c.id = cr.category_id AND c.is_active = 1
         WHERE f.id IN ({$placeholders})
+        AND {$visibleSql}
         AND ((cr.rule_type = 'extension' AND cr.pattern = f.extension) OR (cr.rule_type = 'folder_path' AND (f.relative_path = cr.pattern OR f.relative_path LIKE CONCAT(cr.pattern, '/%'))) OR (cr.rule_type = 'path_contains' AND f.relative_path LIKE CONCAT('%', cr.pattern, '%')) OR (cr.rule_type = 'name_contains' AND f.name LIKE CONCAT('%', cr.pattern, '%')))
         ORDER BY category_name, source
     ";
@@ -208,6 +229,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$selectedIds) {
             throw new RuntimeException('No file/folder selection was supplied.');
         }
+        fp_assert_not_ignored($selectedIds);
 
         if ($action === 'add_category' || $action === 'remove_category') {
             $categoryIdPost = (int)($_POST['context_category_id'] ?? 0);
@@ -215,7 +237,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 throw new RuntimeException('No category was selected.');
             }
             $placeholders = implode(',', array_fill(0, count($selectedIds), '?'));
-            $stmt = db()->prepare("SELECT id, drive_id, relative_path, entry_type FROM file_entries WHERE id IN ({$placeholders})");
+            $visibleSql = IgnoredFolderSql::excludeCondition('f');
+            $stmt = db()->prepare("SELECT f.id, f.drive_id, f.relative_path, f.entry_type FROM file_entries f WHERE f.id IN ({$placeholders}) AND {$visibleSql}");
             $stmt->execute($selectedIds);
             foreach ($stmt->fetchAll() as $entry) {
                 if ($action === 'add_category') {
@@ -325,15 +348,16 @@ $explorerCategoryMap = [];
 
 try {
     if ($driveId > 0) {
-        $expr = fp_parent_expr();
+        $expr = fp_parent_expr('f');
+        $visibleSql = IgnoredFolderSql::excludeCondition('f');
         $sortSql = match ($sort) {
-            'type' => "CASE WHEN entry_type = 'folder' THEN 'Folder' ELSE COALESCE(extension, '') END",
-            'size' => 'size_bytes',
-            'modified' => 'modified_at',
-            default => 'name',
+            'type' => "CASE WHEN f.entry_type = 'folder' THEN 'Folder' ELSE COALESCE(f.extension, '') END",
+            'size' => 'f.size_bytes',
+            'modified' => 'f.modified_at',
+            default => 'f.name',
         };
 
-        $summaryStmt = db()->prepare("SELECT COUNT(*) AS total_items, SUM(entry_type = 'file') AS file_count, SUM(entry_type = 'folder') AS folder_count, COALESCE(SUM(CASE WHEN entry_type = 'file' THEN size_bytes ELSE 0 END), 0) AS total_size FROM file_entries WHERE drive_id = ? AND is_missing = 0 AND {$expr} = ?");
+        $summaryStmt = db()->prepare("SELECT COUNT(*) AS total_items, SUM(f.entry_type = 'file') AS file_count, SUM(f.entry_type = 'folder') AS folder_count, COALESCE(SUM(CASE WHEN f.entry_type = 'file' THEN f.size_bytes ELSE 0 END), 0) AS total_size FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$expr} = ?");
         $summaryStmt->execute([$driveId, $currentPath]);
         $summary = $summaryStmt->fetch() ?: [];
         $explorerTotalItems = (int)($summary['total_items'] ?? 0);
@@ -341,7 +365,7 @@ try {
         $explorerFolderCount = (int)($summary['folder_count'] ?? 0);
         $explorerTotalSize = (int)($summary['total_size'] ?? 0);
 
-        $stmt = db()->prepare("SELECT id, relative_path, name, extension, entry_type, size_bytes, modified_at FROM file_entries WHERE drive_id = ? AND is_missing = 0 AND {$expr} = ? ORDER BY CASE WHEN entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, name ASC LIMIT ? OFFSET ?");
+        $stmt = db()->prepare("SELECT f.id, f.relative_path, f.name, f.extension, f.entry_type, f.size_bytes, f.modified_at FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$expr} = ? ORDER BY CASE WHEN f.entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, f.name ASC LIMIT ? OFFSET ?");
         $stmt->bindValue(1, $driveId, PDO::PARAM_INT);
         $stmt->bindValue(2, $currentPath);
         $stmt->bindValue(3, EXPLORER_PAGE_SIZE, PDO::PARAM_INT);
@@ -370,7 +394,7 @@ $searchCategoryMap = [];
 
 try {
     if ($hasSearch) {
-        $where = ['f.is_missing = 0'];
+        $where = ['f.is_missing = 0', IgnoredFolderSql::excludeCondition('f')];
         $params = [];
         if ($scopeDriveId > 0) {
             $where[] = 'f.drive_id = ?';
