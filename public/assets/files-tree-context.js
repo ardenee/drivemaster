@@ -11,6 +11,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     let treeFolderRow = null;
     let contextDriveRow = null;
+    let toastShownAt = 0;
+    let toastHideTimer = null;
+    let activeTreeFetches = 0;
 
     function hideMenus() {
         menu.classList.remove('visible');
@@ -28,23 +31,69 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function showTreeToast(text) {
+    function ensureTreeToast() {
         let toast = document.getElementById('tree-loading-toast');
         if (!toast) {
             toast = document.createElement('div');
             toast.id = 'tree-loading-toast';
             toast.className = 'tree-loading-toast';
+            toast.setAttribute('role', 'status');
+            toast.setAttribute('aria-live', 'polite');
             document.body.appendChild(toast);
         }
+        return toast;
+    }
+
+    function showTreeToast(text) {
+        const toast = ensureTreeToast();
+        if (toastHideTimer) {
+            clearTimeout(toastHideTimer);
+            toastHideTimer = null;
+        }
+        toastShownAt = Date.now();
         toast.textContent = text || 'Loading folder data...';
         toast.classList.add('visible');
     }
 
     function hideTreeToast() {
         const toast = document.getElementById('tree-loading-toast');
-        if (toast) {
-            toast.classList.remove('visible');
+        if (!toast) {
+            return;
         }
+        const elapsed = Date.now() - toastShownAt;
+        const delay = Math.max(0, 450 - elapsed);
+        if (toastHideTimer) {
+            clearTimeout(toastHideTimer);
+        }
+        toastHideTimer = setTimeout(function () {
+            if (activeTreeFetches <= 0) {
+                toast.classList.remove('visible');
+            }
+        }, delay);
+    }
+
+    function isTreeFetch(input) {
+        const url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+        return url.includes('files-tree-children.php') || url.includes('tree-resolve.php') || url.includes('files-entry-resolve.php');
+    }
+
+    function installTreeFetchNotice() {
+        if (window.__driveMasterTreeFetchNoticeInstalled || !window.fetch) {
+            return;
+        }
+        window.__driveMasterTreeFetchNoticeInstalled = true;
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) {
+            if (!isTreeFetch(input)) {
+                return originalFetch(input, init);
+            }
+            activeTreeFetches++;
+            showTreeToast('Loading folder data...');
+            return originalFetch(input, init).finally(function () {
+                activeTreeFetches = Math.max(0, activeTreeFetches - 1);
+                hideTreeToast();
+            });
+        };
     }
 
     function resolveTreeFolder(row) {
@@ -241,6 +290,8 @@ document.addEventListener('DOMContentLoaded', function () {
         removeDriveDescendants(driveRow);
     }
 
+    ensureTreeToast();
+    installTreeFetchNotice();
     ensureDriveMenuActions();
 
     sidebar.addEventListener('contextmenu', function (event) {
