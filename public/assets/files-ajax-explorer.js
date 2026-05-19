@@ -20,12 +20,36 @@
             return;
         }
 
-        let currentDriveId = Number(new URLSearchParams(window.location.search).get('drive_id') || document.querySelector('.tree-drive.selected')?.dataset.driveId || 0);
-        let currentPath = new URLSearchParams(window.location.search).get('path') || '';
-        let currentPage = Number(new URLSearchParams(window.location.search).get('explorer_page') || 1);
-        let currentSort = new URLSearchParams(window.location.search).get('sort') || 'name';
-        let currentDir = new URLSearchParams(window.location.search).get('dir') || 'asc';
+        function savedState() {
+            try {
+                const state = JSON.parse(localStorage.getItem('driveMasterFilesExplorerState') || '{}');
+                return state && Number(state.driveId) > 0 ? state : null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function writeSavedState(driveId, path, page, sort, dir) {
+            try {
+                localStorage.setItem('driveMasterFilesExplorerState', JSON.stringify({
+                    driveId: Number(driveId || 0),
+                    path: path || '',
+                    page: Number(page || 1),
+                    sort: sort || 'name',
+                    dir: dir || 'asc'
+                }));
+            } catch (e) {}
+        }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const remembered = savedState();
+        let currentDriveId = Number(urlParams.get('drive_id') || document.querySelector('.tree-drive.selected')?.dataset.driveId || remembered?.driveId || 0);
+        let currentPath = urlParams.get('path') ?? remembered?.path ?? '';
+        let currentPage = Number(urlParams.get('explorer_page') || remembered?.page || 1);
+        let currentSort = urlParams.get('sort') || remembered?.sort || 'name';
+        let currentDir = urlParams.get('dir') || remembered?.dir || 'asc';
         let loading = false;
+        let queuedLoad = null;
 
         function formatBytes(bytes) {
             bytes = Number(bytes || 0);
@@ -125,7 +149,7 @@
             });
         }
 
-        function updateUrl(driveId, path, page, sort, dir) {
+        function updateUrl(driveId, path, page, sort, dir, pushState) {
             const url = new URL(window.location.href);
             url.searchParams.set('drive_id', String(driveId));
             url.searchParams.set('path', path || '');
@@ -134,21 +158,45 @@
             url.searchParams.set('sort', sort || 'name');
             url.searchParams.set('dir', dir || 'asc');
             url.hash = 'explorer-panel';
-            window.history.pushState({ driveId: driveId, path: path || '', page: page || 1, sort: sort || 'name', dir: dir || 'asc' }, '', url.toString());
+            const state = { driveId: Number(driveId), path: path || '', page: Number(page || 1), sort: sort || 'name', dir: dir || 'asc' };
+            if (pushState) {
+                window.history.pushState(state, '', url.toString());
+            } else {
+                window.history.replaceState(state, '', url.toString());
+            }
+            writeSavedState(driveId, path, page, sort, dir);
         }
 
         function loadExplorer(driveId, path, page, sort, dir, pushState) {
-            if (loading || !driveId) {
+            driveId = Number(driveId || 0);
+            path = path || '';
+            page = Number(page || 1);
+            sort = sort || 'name';
+            dir = dir || 'asc';
+            if (!driveId) {
                 return;
             }
+            updateUrl(driveId, path, page, sort, dir, pushState);
+            currentDriveId = driveId;
+            currentPath = path;
+            currentPage = page;
+            currentSort = sort;
+            currentDir = dir;
+            setSelectedTreePath(driveId, path);
+
+            if (loading) {
+                queuedLoad = { driveId: driveId, path: path, page: page, sort: sort, dir: dir, pushState: false };
+                return;
+            }
+
             loading = true;
             showOverlay('Loading folder data...');
             const params = new URLSearchParams();
             params.set('drive_id', String(driveId));
-            params.set('path', path || '');
-            params.set('explorer_page', String(page || 1));
-            params.set('sort', sort || 'name');
-            params.set('dir', dir || 'asc');
+            params.set('path', path);
+            params.set('explorer_page', String(page));
+            params.set('sort', sort);
+            params.set('dir', dir);
             fetch('files-explorer-data.php?' + params.toString(), { cache: 'no-store' })
                 .then(function (response) { return response.json(); })
                 .then(function (data) {
@@ -158,8 +206,8 @@
                     currentDriveId = Number(data.drive_id || driveId);
                     currentPath = data.path || '';
                     currentPage = Number(data.page || page || 1);
-                    currentSort = sort || 'name';
-                    currentDir = dir || 'asc';
+                    currentSort = sort;
+                    currentDir = dir;
                     breadcrumbs.innerHTML = data.breadcrumbs_html || '';
                     tbody.innerHTML = data.rows_html || '';
                     main.querySelectorAll('.ajax-explorer-pager').forEach(function (pager) { pager.remove(); });
@@ -172,9 +220,6 @@
                     updateStatus(data);
                     wireNewRows();
                     setSelectedTreePath(currentDriveId, currentPath);
-                    if (pushState) {
-                        updateUrl(currentDriveId, currentPath, currentPage, currentSort, currentDir);
-                    }
                 })
                 .catch(function (error) {
                     alert(error.message || 'Could not load folder.');
@@ -182,6 +227,11 @@
                 .finally(function () {
                     loading = false;
                     hideOverlay();
+                    if (queuedLoad) {
+                        const next = queuedLoad;
+                        queuedLoad = null;
+                        loadExplorer(next.driveId, next.path, next.page, next.sort, next.dir, next.pushState);
+                    }
                 });
         }
 
@@ -190,6 +240,7 @@
             if (treeRow && !event.target.closest('.tree-toggle')) {
                 event.preventDefault();
                 event.stopPropagation();
+                event.stopImmediatePropagation();
                 loadExplorer(Number(treeRow.dataset.driveId || currentDriveId), treeRow.dataset.path || '', 1, currentSort, currentDir, true);
                 return;
             }
@@ -225,6 +276,11 @@
         });
 
         wireNewRows();
+        updateUrl(currentDriveId, currentPath, currentPage, currentSort, currentDir, false);
+        const hasUrlDrive = Number(urlParams.get('drive_id') || 0) > 0;
+        if (!hasUrlDrive && remembered && Number(remembered.driveId) > 0) {
+            loadExplorer(Number(remembered.driveId), remembered.path || '', Number(remembered.page || 1), remembered.sort || 'name', remembered.dir || 'asc', false);
+        }
     }
 
     if (document.readyState === 'loading') {
