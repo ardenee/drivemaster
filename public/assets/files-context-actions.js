@@ -25,27 +25,16 @@
         let contextDriveId = '';
         let contextTreeFolder = null;
 
+        function refreshReturnUrl() {
+            if (typeof window.driveMasterSyncFilesReturnUrl === 'function') {
+                window.driveMasterSyncFilesReturnUrl();
+            }
+        }
+
         function hideMenus() {
             fileMenu.classList.remove('visible');
             driveMenu.classList.remove('visible');
             delete fileMenu.dataset.treeFolderMenu;
-        }
-
-        function selectedRowsFor(row) {
-            const table = row.closest('.selectable-table');
-            if (!table) {
-                return [row];
-            }
-            const selected = Array.from(table.querySelectorAll('.selectable-row.selected-row'));
-            return selected.includes(row) ? selected : [row];
-        }
-
-        function selectOnly(row) {
-            const table = row.closest('.selectable-table');
-            if (table) {
-                table.querySelectorAll('.selected-row').forEach(function (selected) { selected.classList.remove('selected-row'); });
-            }
-            row.classList.add('selected-row');
         }
 
         function preserveOrSelect(row) {
@@ -76,6 +65,7 @@
                 return;
             }
 
+            refreshReturnUrl();
             contextTreeFolder = isTreeFolder ? row : null;
             if (!isTreeFolder) {
                 contextRows = preserveOrSelect(row);
@@ -110,6 +100,7 @@
             event.stopPropagation();
             event.stopImmediatePropagation();
 
+            refreshReturnUrl();
             contextRows = [];
             contextTreeFolder = null;
             contextDriveId = row.dataset.driveId || '';
@@ -132,6 +123,7 @@
         }
 
         function openActionDialog(action, buttonText) {
+            refreshReturnUrl();
             const ids = rowIds(contextRows);
             if (!ids.length) {
                 return;
@@ -172,6 +164,7 @@
         }
 
         function openRemoveDriveDialog() {
+            refreshReturnUrl();
             if (!contextDriveId) {
                 contextDriveId = driveMenu.dataset.driveId || '';
             }
@@ -248,6 +241,7 @@
         }, true);
 
         form.addEventListener('submit', function (event) {
+            refreshReturnUrl();
             const action = actionInput.value;
             if ((action === 'queue_delete' || action === 'remove_drive') && !confirm('Are you sure?')) {
                 event.preventDefault();
