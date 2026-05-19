@@ -71,12 +71,21 @@
             }
         }
 
-        function treeLevel(row) {
-            return Number(row.dataset.level || (row.classList.contains('tree-drive') ? -1 : 0));
+        function driveRowFor(driveId) {
+            return document.querySelector('.tree-drive[data-drive-id="' + String(driveId).replace(/"/g, '\\"') + '"]');
         }
 
-        function setToggle(row, value) {
-            const toggle = row ? row.querySelector('.tree-toggle') : null;
+        function removeDriveDescendants(driveRow) {
+            let next = driveRow ? driveRow.nextElementSibling : null;
+            while (next && next.classList.contains('tree-folder')) {
+                const remove = next;
+                next = next.nextElementSibling;
+                remove.remove();
+            }
+        }
+
+        function setDriveToggle(driveRow, value) {
+            const toggle = driveRow ? driveRow.querySelector('.tree-toggle') : null;
             if (toggle) {
                 toggle.textContent = value;
             }
@@ -87,156 +96,68 @@
                 if (String(driveRow.dataset.driveId || '') === String(driveId)) {
                     return;
                 }
-                let next = driveRow.nextElementSibling;
-                while (next && next.classList.contains('tree-folder')) {
-                    const remove = next;
-                    next = next.nextElementSibling;
-                    remove.remove();
-                }
+                removeDriveDescendants(driveRow);
                 driveRow.dataset.loaded = '0';
-                setToggle(driveRow, '▸');
+                setDriveToggle(driveRow, '▸');
+                driveRow.classList.remove('selected-row', 'selected');
             });
-        }
-
-        function rowForPath(driveId, path) {
-            if (!path) {
-                return document.querySelector('.tree-drive[data-drive-id="' + String(driveId).replace(/"/g, '\\"') + '"]');
-            }
-            return Array.from(document.querySelectorAll('.tree-folder')).find(function (row) {
-                return String(row.dataset.driveId || '') === String(driveId) && String(row.dataset.path || '') === String(path || '');
-            }) || null;
-        }
-
-        function insertTreeChildrenAfter(row, html) {
-            const template = document.createElement('template');
-            template.innerHTML = html || '';
-            const nodes = Array.from(template.content.children);
-            let anchor = row;
-            nodes.forEach(function (node) {
-                anchor.insertAdjacentElement('afterend', node);
-                anchor = node;
-            });
-            if (window.__driveMasterIgnoredFolderFilterLoaded !== true) {
-                const script = document.createElement('script');
-                script.src = 'assets/ignored-folders-client.js?ts=' + Date.now();
-                script.defer = true;
-                window.__driveMasterIgnoredFolderFilterLoaded = true;
-                document.head.appendChild(script);
-            }
-            return nodes;
-        }
-
-        function removeTreeDescendants(row) {
-            if (!row) {
-                return;
-            }
-            const level = treeLevel(row);
-            let next = row.nextElementSibling;
-            while (next && next.classList.contains('tree-folder') && treeLevel(next) > level) {
-                const remove = next;
-                next = next.nextElementSibling;
-                remove.remove();
-            }
-            row.dataset.loaded = '0';
-            setToggle(row, '▸');
-        }
-
-        function loadTreeChildrenForRow(row) {
-            if (!row) {
-                return Promise.resolve([]);
-            }
-            const driveId = row.classList.contains('tree-drive') ? row.dataset.driveId : row.dataset.driveId;
-            const parentPath = row.classList.contains('tree-drive') ? '' : (row.dataset.path || '');
-            const level = row.classList.contains('tree-drive') ? -1 : treeLevel(row);
-            if (!driveId) {
-                return Promise.resolve([]);
-            }
-            setToggle(row, '…');
-            return fetch('files-tree-children.php?drive_id=' + encodeURIComponent(driveId) + '&parent_path=' + encodeURIComponent(parentPath) + '&level=' + encodeURIComponent(level), { cache: 'no-store' })
-                .then(function (response) { return response.json(); })
-                .then(function (data) {
-                    if (!data.ok) {
-                        return [];
-                    }
-                    removeTreeDescendants(row);
-                    const nodes = insertTreeChildrenAfter(row, data.html || '');
-                    row.dataset.loaded = '1';
-                    setToggle(row, nodes.length ? '▾' : '·');
-                    return nodes;
-                })
-                .catch(function () {
-                    row.dataset.loaded = '0';
-                    setToggle(row, '▸');
-                    return [];
-                });
         }
 
         function selectTreeRow(driveId, path) {
             document.querySelectorAll('.tree-drive,.tree-folder').forEach(function (row) {
                 row.classList.remove('selected-row', 'selected');
             });
-            const target = rowForPath(driveId, path) || rowForPath(driveId, '');
-            if (target) {
-                target.classList.add('selected-row', 'selected');
-                target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            const target = path
+                ? Array.from(document.querySelectorAll('.tree-folder')).find(function (row) { return String(row.dataset.driveId || '') === String(driveId) && String(row.dataset.path || '') === String(path || ''); })
+                : driveRowFor(driveId);
+            const fallback = driveRowFor(driveId);
+            const row = target || fallback;
+            if (row) {
+                row.classList.add('selected-row', 'selected');
+                row.scrollIntoView({ block: 'nearest', inline: 'nearest' });
             }
         }
 
-        function expandTreeToPath(driveId, path) {
+        function syncTreeToPath(driveId, path) {
             driveId = Number(driveId || 0);
             path = String(path || '').replace(/^\/+|\/+$/g, '');
-            if (!driveId) {
-                return Promise.resolve();
-            }
-            collapseOtherDrives(driveId);
-            const driveRow = rowForPath(driveId, '');
+            const driveRow = driveRowFor(driveId);
             if (!driveRow) {
                 return Promise.resolve();
             }
 
-            const parts = path ? path.split('/').filter(Boolean) : [];
-            let chain = Promise.resolve(driveRow);
-            let currentPath = '';
+            collapseOtherDrives(driveId);
+            setDriveToggle(driveRow, '…');
 
-            if (parts.length === 0) {
-                selectTreeRow(driveId, '');
-                return Promise.resolve();
-            }
+            const params = new URLSearchParams();
+            params.set('drive_id', String(driveId));
+            params.set('path', path);
 
-            chain = chain.then(function (row) {
-                if (row.dataset.loaded === '1' && rowForPath(driveId, parts[0])) {
-                    return row;
-                }
-                return loadTreeChildrenForRow(row).then(function () { return row; });
-            });
-
-            parts.forEach(function (part, index) {
-                currentPath = currentPath ? currentPath + '/' + part : part;
-                const expectedPath = currentPath;
-                chain = chain.then(function () {
-                    const row = rowForPath(driveId, expectedPath);
-                    if (!row) {
-                        return null;
+            return fetch('files-tree-branch.php?' + params.toString(), { cache: 'no-store' })
+                .then(function (response) { return response.json(); })
+                .then(function (data) {
+                    if (!data.ok) {
+                        throw new Error(data.error || 'Could not load tree branch.');
                     }
-                    if (index < parts.length - 1) {
-                        const nextPath = expectedPath + '/' + parts[index + 1];
-                        if (row.dataset.loaded === '1' && rowForPath(driveId, nextPath)) {
-                            setToggle(row, '▾');
-                            return row;
-                        }
-                        return loadTreeChildrenForRow(row).then(function () { return row; });
+                    removeDriveDescendants(driveRow);
+                    if (data.html) {
+                        const template = document.createElement('template');
+                        template.innerHTML = data.html;
+                        let anchor = driveRow;
+                        Array.from(template.content.children).forEach(function (node) {
+                            anchor.insertAdjacentElement('afterend', node);
+                            anchor = node;
+                        });
                     }
-                    return row;
+                    driveRow.dataset.loaded = data.html ? '1' : '0';
+                    setDriveToggle(driveRow, data.html ? '▾' : '·');
+                    selectTreeRow(driveId, path);
+                })
+                .catch(function () {
+                    driveRow.dataset.loaded = '0';
+                    setDriveToggle(driveRow, '▸');
+                    selectTreeRow(driveId, path);
                 });
-            });
-
-            return chain.then(function () {
-                selectTreeRow(driveId, path);
-            });
-        }
-
-        function setSelectedTreePath(driveId, path) {
-            selectTreeRow(driveId, path || '');
         }
 
         function updateStatus(data) {
@@ -313,7 +234,7 @@
             currentPage = page;
             currentSort = sort;
             currentDir = dir;
-            setSelectedTreePath(driveId, path);
+            selectTreeRow(driveId, path);
 
             if (loading) {
                 queuedLoad = { driveId: driveId, path: path, page: page, sort: sort, dir: dir, pushState: false, message: 'Loading requested folder next...' };
@@ -351,7 +272,7 @@
                     }
                     updateStatus(data);
                     wireNewRows();
-                    return expandTreeToPath(currentDriveId, currentPath);
+                    return syncTreeToPath(currentDriveId, currentPath);
                 })
                 .catch(function (error) {
                     alert(error.message || 'Could not load folder.');
@@ -427,7 +348,7 @@
 
         wireNewRows();
         updateUrl(currentDriveId, currentPath, currentPage, currentSort, currentDir, false);
-        expandTreeToPath(currentDriveId, currentPath);
+        syncTreeToPath(currentDriveId, currentPath);
     }
 
     if (document.readyState === 'loading') {
