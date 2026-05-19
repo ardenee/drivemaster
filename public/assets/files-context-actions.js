@@ -48,6 +48,21 @@
             row.classList.add('selected-row');
         }
 
+        function preserveOrSelect(row) {
+            const table = row.closest('.selectable-table');
+            if (!table) {
+                row.classList.add('selected-row');
+                return [row];
+            }
+            const selected = Array.from(table.querySelectorAll('.selectable-row.selected-row'));
+            if (selected.includes(row)) {
+                return selected;
+            }
+            table.querySelectorAll('.selected-row').forEach(function (selectedRow) { selectedRow.classList.remove('selected-row'); });
+            row.classList.add('selected-row');
+            return [row];
+        }
+
         function rowIds(rows) {
             return rows.map(function (row) { return row.dataset.id || ''; }).filter(Boolean);
         }
@@ -63,12 +78,12 @@
 
             contextTreeFolder = isTreeFolder ? row : null;
             if (!isTreeFolder) {
-                selectOnly(row);
+                contextRows = preserveOrSelect(row);
             } else {
                 document.querySelectorAll('.tree-folder.selected-row, .tree-drive.selected-row').forEach(function (selected) { selected.classList.remove('selected-row'); });
                 row.classList.add('selected-row');
+                contextRows = [row];
             }
-            contextRows = isTreeFolder ? [row] : selectedRowsFor(row);
             contextDriveId = '';
 
             const ids = rowIds(contextRows);
