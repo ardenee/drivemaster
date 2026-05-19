@@ -20,36 +20,14 @@
             return;
         }
 
-        function savedState() {
-            try {
-                const state = JSON.parse(localStorage.getItem('driveMasterFilesExplorerState') || '{}');
-                return state && Number(state.driveId) > 0 ? state : null;
-            } catch (e) {
-                return null;
-            }
-        }
-
-        function writeSavedState(driveId, path, page, sort, dir) {
-            try {
-                localStorage.setItem('driveMasterFilesExplorerState', JSON.stringify({
-                    driveId: Number(driveId || 0),
-                    path: path || '',
-                    page: Number(page || 1),
-                    sort: sort || 'name',
-                    dir: dir || 'asc'
-                }));
-            } catch (e) {}
-        }
-
         const urlParams = new URLSearchParams(window.location.search);
-        const remembered = savedState();
         const urlDriveId = Number(urlParams.get('drive_id') || 0);
         const selectedDriveId = Number(document.querySelector('.tree-drive.selected')?.dataset.driveId || 0);
-        let currentDriveId = Number(urlDriveId || remembered?.driveId || selectedDriveId || 0);
-        let currentPath = urlParams.has('path') ? (urlParams.get('path') || '') : (remembered?.path || '');
-        let currentPage = Number(urlParams.get('explorer_page') || remembered?.page || 1);
-        let currentSort = urlParams.get('sort') || remembered?.sort || 'name';
-        let currentDir = urlParams.get('dir') || remembered?.dir || 'asc';
+        let currentDriveId = Number(urlDriveId || selectedDriveId || document.querySelector('.tree-drive')?.dataset.driveId || 0);
+        let currentPath = urlParams.has('path') ? (urlParams.get('path') || '') : '';
+        let currentPage = Number(urlParams.get('explorer_page') || 1);
+        let currentSort = urlParams.get('sort') || 'name';
+        let currentDir = urlParams.get('dir') || 'asc';
         let loading = false;
         let queuedLoad = null;
         let treeClickTimer = null;
@@ -167,7 +145,6 @@
             } else {
                 window.history.replaceState(state, '', url.toString());
             }
-            writeSavedState(driveId, path, page, sort, dir);
         }
 
         function loadExplorer(driveId, path, page, sort, dir, pushState) {
@@ -298,10 +275,6 @@
 
         wireNewRows();
         updateUrl(currentDriveId, currentPath, currentPage, currentSort, currentDir, false);
-        const hasUrlDrive = urlDriveId > 0;
-        if (!hasUrlDrive && remembered && Number(remembered.driveId) > 0) {
-            loadExplorer(Number(remembered.driveId), remembered.path || '', Number(remembered.page || 1), remembered.sort || 'name', remembered.dir || 'asc', false);
-        }
     }
 
     if (document.readyState === 'loading') {
