@@ -134,7 +134,7 @@
             const url = new URL(window.location.href);
             url.searchParams.set('drive_id', String(driveId));
             url.searchParams.set('path', path || '');
-            url.searchParams.set('expanded_drive_id', String(driveId));
+            url.searchParams.delete('expanded_drive_id');
             url.searchParams.set('explorer_page', String(page || 1));
             url.searchParams.set('sort', sort || 'name');
             url.searchParams.set('dir', dir || 'asc');
