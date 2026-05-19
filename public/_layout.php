@@ -21,6 +21,7 @@ function render_header(string $title): void
         <a href="jobs.php">Jobs</a>
         <a href="drives.php">Drives</a>
         <a href="files.php">Files</a>
+        <a href="ignored-folders.php">Ignored Folders</a>
         <span class="nav-dropdown">
             <button type="button" class="nav-dropdown-button">Categories ▾</button>
             <span class="nav-dropdown-menu">
