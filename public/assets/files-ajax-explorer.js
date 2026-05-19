@@ -277,7 +277,6 @@
                 treeClickTimer = null;
             }
             event.preventDefault();
-            event.stopPropagation();
         }, true);
 
         table.querySelectorAll('thead a').forEach(function (link) {
