@@ -30,6 +30,18 @@ function fed_link(array $params = []): string
     return 'files.php?' . http_build_query($params) . '#explorer-panel';
 }
 
+function fed_badge_style(?string $colorHex): string
+{
+    $colorHex = (string)$colorHex;
+    if (!preg_match('/^#[0-9a-fA-F]{6}$/', $colorHex)) {
+        return '';
+    }
+    $r = hexdec(substr($colorHex, 1, 2));
+    $g = hexdec(substr($colorHex, 3, 2));
+    $b = hexdec(substr($colorHex, 5, 2));
+    return ' style="background-color: rgba(' . $r . ',' . $g . ',' . $b . ',0.55); border-color: rgba(' . $r . ',' . $g . ',' . $b . ',0.85);"';
+}
+
 function fed_category_badges(array $entryIds): array
 {
     $entryIds = array_values(array_unique(array_filter(array_map('intval', $entryIds), static fn(int $id): bool => $id > 0)));
@@ -39,14 +51,14 @@ function fed_category_badges(array $entryIds): array
     $placeholders = implode(',', array_fill(0, count($entryIds), '?'));
     $visibleSql = IgnoredFolderSql::excludeCondition('f');
     $sql = "
-        SELECT f.id AS file_entry_id, c.name AS category_name, 'manual' AS source
+        SELECT f.id AS file_entry_id, c.name AS category_name, c.color_hex, 'manual' AS source
         FROM file_entries f
         JOIN category_manual_assignments cma ON cma.category_id IS NOT NULL
         JOIN categories c ON c.id = cma.category_id AND c.is_active = 1
         WHERE f.id IN ({$placeholders}) AND {$visibleSql}
         AND (cma.file_entry_id = f.id OR (cma.assignment_type = 'folder' AND cma.drive_id = f.drive_id AND cma.path_prefix IS NOT NULL AND (f.relative_path = cma.path_prefix OR f.relative_path LIKE CONCAT(cma.path_prefix, '/%'))))
         UNION ALL
-        SELECT f.id AS file_entry_id, c.name AS category_name, 'rule' AS source
+        SELECT f.id AS file_entry_id, c.name AS category_name, c.color_hex, 'rule' AS source
         FROM file_entries f
         JOIN category_rules cr ON cr.is_enabled = 1 AND (cr.drive_id IS NULL OR cr.drive_id = f.drive_id)
         JOIN categories c ON c.id = cr.category_id AND c.is_active = 1
@@ -66,7 +78,7 @@ function fed_category_badges(array $entryIds): array
         }
         $seen[$key] = true;
         $source = $row['source'] === 'manual' ? 'manual' : 'rule';
-        $map[$entryId][] = '<span class="category-badge category-' . e($source) . '" title="' . e($source) . '">' . e((string)$row['category_name']) . '</span>';
+        $map[$entryId][] = '<span class="category-badge category-' . e($source) . '" title="' . e($source) . ': ' . e((string)$row['category_name']) . '"' . fed_badge_style((string)($row['color_hex'] ?? '')) . '>' . e((string)$row['category_name']) . '</span>';
     }
     return $map;
 }
