@@ -3,35 +3,19 @@ document.addEventListener('DOMContentLoaded', function () {
     const menu = document.getElementById('context-menu');
     const driveMenu = document.getElementById('drive-context-menu');
     const dialog = document.getElementById('context-dialog');
-    const form = document.getElementById('context-form');
 
-    if (!sidebar || !menu || !dialog || !form) {
-        return;
-    }
-
-    let treeFolderRow = null;
-    let contextDriveRow = null;
-    let toastShownAt = 0;
-    let toastHideTimer = null;
-    let activeTreeFetches = 0;
-
-    function hideMenus() {
-        menu.classList.remove('visible');
-        if (driveMenu) {
-            driveMenu.classList.remove('visible');
+    function loadIgnoredFolderFilter() {
+        if (window.__driveMasterIgnoredFolderFilterLoaded) {
+            return;
         }
+        window.__driveMasterIgnoredFolderFilterLoaded = true;
+        const script = document.createElement('script');
+        script.src = 'assets/ignored-folders-client.js?ts=' + Date.now();
+        script.defer = true;
+        document.head.appendChild(script);
     }
 
-    function getUrlParam(row, key) {
-        try {
-            const url = new URL(row.dataset.url || '', window.location.href);
-            return url.searchParams.get(key) || '';
-        } catch (e) {
-            return '';
-        }
-    }
-
-    function ensureTreeToast() {
+    function showToast(text) {
         let toast = document.getElementById('tree-loading-toast');
         if (!toast) {
             toast = document.createElement('div');
@@ -41,153 +25,21 @@ document.addEventListener('DOMContentLoaded', function () {
             toast.setAttribute('aria-live', 'polite');
             document.body.appendChild(toast);
         }
-        return toast;
-    }
-
-    function showTreeToast(text) {
-        const toast = ensureTreeToast();
-        if (toastHideTimer) {
-            clearTimeout(toastHideTimer);
-            toastHideTimer = null;
-        }
-        toastShownAt = Date.now();
         toast.textContent = text || 'Loading folder data...';
         toast.classList.add('visible');
+        clearTimeout(window.__driveMasterTreeToastTimer);
+        window.__driveMasterTreeToastTimer = setTimeout(function () {
+            toast.classList.remove('visible');
+        }, 1200);
     }
 
-    function hideTreeToast() {
-        const toast = document.getElementById('tree-loading-toast');
-        if (!toast) {
-            return;
+    function getUrlParam(row, key) {
+        try {
+            const url = new URL(row.dataset.url || '', window.location.href);
+            return url.searchParams.get(key) || '';
+        } catch (e) {
+            return '';
         }
-        const elapsed = Date.now() - toastShownAt;
-        const delay = Math.max(0, 450 - elapsed);
-        if (toastHideTimer) {
-            clearTimeout(toastHideTimer);
-        }
-        toastHideTimer = setTimeout(function () {
-            if (activeTreeFetches <= 0) {
-                toast.classList.remove('visible');
-            }
-        }, delay);
-    }
-
-    function isTreeFetch(input) {
-        const url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
-        return url.includes('files-tree-children.php') || url.includes('tree-resolve.php') || url.includes('files-entry-resolve.php');
-    }
-
-    function installTreeFetchNotice() {
-        if (window.__driveMasterTreeFetchNoticeInstalled || !window.fetch) {
-            return;
-        }
-        window.__driveMasterTreeFetchNoticeInstalled = true;
-        const originalFetch = window.fetch.bind(window);
-        window.fetch = function (input, init) {
-            if (!isTreeFetch(input)) {
-                return originalFetch(input, init);
-            }
-            activeTreeFetches++;
-            showTreeToast('Loading folder data...');
-            return originalFetch(input, init).finally(function () {
-                activeTreeFetches = Math.max(0, activeTreeFetches - 1);
-                hideTreeToast();
-            });
-        };
-    }
-
-    function resolveTreeFolder(row) {
-        if (row.dataset.id) {
-            return Promise.resolve(true);
-        }
-        const driveId = row.dataset.driveId || getUrlParam(row, 'drive_id');
-        const path = row.dataset.path || getUrlParam(row, 'path');
-        if (!driveId || !path) {
-            return Promise.resolve(false);
-        }
-        showTreeToast('Loading folder details...');
-        return fetch('tree-resolve.php?drive_id=' + encodeURIComponent(driveId) + '&path=' + encodeURIComponent(path), { cache: 'no-store' })
-            .then(function (response) { return response.json(); })
-            .then(function (data) {
-                if (!data.ok) {
-                    return false;
-                }
-                row.dataset.id = String(data.id);
-                row.dataset.entryType = 'folder';
-                row.dataset.entryName = data.name || row.textContent.trim().replace(/^▸|^▾|^·|^…/, '').replace(/^📁/, '').trim();
-                row.dataset.size = '0';
-                row.dataset.isFile = '0';
-                row.dataset.driveId = driveId;
-                row.dataset.path = path;
-                return true;
-            })
-            .catch(function () { return false; })
-            .finally(hideTreeToast);
-    }
-
-    function selectedTreeFolderIds() {
-        if (!treeFolderRow || !treeFolderRow.dataset.id) {
-            return [];
-        }
-        return [treeFolderRow.dataset.id];
-    }
-
-    function setAreaVisible(id, visible) {
-        const element = document.getElementById(id);
-        if (element) {
-            element.style.display = visible ? 'block' : 'none';
-        }
-    }
-
-    function openActionDialog(action, buttonText) {
-        const ids = selectedTreeFolderIds();
-        if (!ids.length) {
-            return;
-        }
-
-        const actionInput = document.getElementById('context-action-input');
-        const selectedInput = document.getElementById('context-selected-ids');
-        const driveInput = document.getElementById('context-drive-id');
-        const newNameInput = document.getElementById('context-new-name');
-        const title = document.getElementById('context-dialog-title');
-        const note = document.getElementById('context-dialog-note');
-
-        if (!actionInput || !selectedInput || !driveInput) {
-            return;
-        }
-
-        selectedInput.value = ids.join(',');
-        driveInput.value = '';
-        if (newNameInput) {
-            newNameInput.value = treeFolderRow.dataset.entryName || '';
-        }
-
-        setAreaVisible('context-category-area', action === 'add_category' || action === 'remove_category');
-        setAreaVisible('context-move-area', action === 'move');
-        setAreaVisible('context-rename-area', action === 'rename');
-
-        const actionMap = {
-            add_category: 'add_category',
-            remove_category: 'remove_category',
-            rename: 'queue_rename',
-            move: 'queue_move',
-            delete: 'queue_delete'
-        };
-        actionInput.value = actionMap[action] || '';
-
-        if (title) {
-            title.textContent = buttonText || 'Action';
-        }
-        if (note) {
-            note.textContent = action === 'delete'
-                ? 'Confirm delete job for selected folder. This will queue a background job.'
-                : (['move', 'rename'].includes(action)
-                    ? 'This queues a background operation job. The disk-modifying executor still needs to be completed safely.'
-                    : 'Manual category changes are separate from optional rules.');
-        }
-
-        hideMenus();
-        dialog.classList.remove('hidden');
     }
 
     function ensureDriveMenuActions() {
@@ -236,6 +88,7 @@ document.addEventListener('DOMContentLoaded', function () {
             anchor.insertAdjacentElement('afterend', node);
             anchor = node;
         });
+        loadIgnoredFolderFilter();
         return nodes;
     }
 
@@ -250,7 +103,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (toggle) {
             toggle.textContent = '…';
         }
-        showTreeToast('Loading folder data...');
+        showToast('Loading folder data...');
         return fetch('files-tree-children.php?drive_id=' + encodeURIComponent(driveId) + '&parent_path=' + encodeURIComponent(parentPath || '') + '&level=' + encodeURIComponent(level), { cache: 'no-store' })
             .then(function (response) { return response.json(); })
             .then(function (data) {
@@ -272,94 +125,58 @@ document.addEventListener('DOMContentLoaded', function () {
                     toggle.textContent = '▸';
                 }
                 return [];
+            });
+    }
+
+    function resolveTreeFolder(row) {
+        if (row.dataset.id) {
+            return Promise.resolve(true);
+        }
+        const driveId = row.dataset.driveId || getUrlParam(row, 'drive_id');
+        const path = row.dataset.path || getUrlParam(row, 'path');
+        if (!driveId || !path) {
+            return Promise.resolve(false);
+        }
+        showToast('Loading folder details...');
+        return fetch('tree-resolve.php?drive_id=' + encodeURIComponent(driveId) + '&path=' + encodeURIComponent(path), { cache: 'no-store' })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (!data.ok) {
+                    return false;
+                }
+                row.dataset.id = String(data.id);
+                row.dataset.entryType = 'folder';
+                row.dataset.entryName = data.name || row.textContent.trim().replace(/[▸▾·…📁]/g, '').trim();
+                row.dataset.size = '0';
+                row.dataset.isFile = '0';
+                row.dataset.driveId = driveId;
+                row.dataset.path = path;
+                return true;
             })
-            .finally(hideTreeToast);
+            .catch(function () { return false; });
     }
 
-    function expandDrive(driveRow) {
-        if (!driveRow) {
+    function openTreeFolderMenu(folder, event) {
+        if (!menu) {
             return;
         }
-        loadChildren(driveRow);
-    }
-
-    function collapseDrive(driveRow) {
-        if (!driveRow) {
-            return;
-        }
-        removeDriveDescendants(driveRow);
-    }
-
-    function showNavigationNotice(row) {
-        if (!row || !row.dataset.url) {
-            return;
-        }
-        showTreeToast('Opening folder. Loading files...');
-        const toggle = row.querySelector('.tree-toggle');
-        if (toggle) {
-            toggle.textContent = '…';
-        }
-    }
-
-    ensureTreeToast();
-    installTreeFetchNotice();
-    ensureDriveMenuActions();
-
-    sidebar.addEventListener('click', function (event) {
-        const row = event.target.closest('.tree-drive,.tree-folder');
-        if (!row || event.target.closest('.tree-toggle')) {
-            return;
-        }
-        showNavigationNotice(row);
-    }, true);
-
-    sidebar.addEventListener('dblclick', function (event) {
-        const row = event.target.closest('.tree-drive,.tree-folder');
-        if (!row || event.target.closest('.tree-toggle')) {
-            return;
-        }
-        showNavigationNotice(row);
-    }, true);
-
-    document.addEventListener('click', function (event) {
-        const link = event.target.closest('a[href*="files.php"], a[href^="?drive_id"], a[href*="drive_id="]');
-        if (!link) {
-            return;
-        }
-        if (link.closest('.context-menu') || link.target === '_blank') {
-            return;
-        }
-        showTreeToast('Loading files...');
-    }, true);
-
-    window.addEventListener('beforeunload', function () {
-        showTreeToast('Loading...');
-    });
-
-    sidebar.addEventListener('contextmenu', function (event) {
-        const folder = event.target.closest('.tree-folder');
-        if (!folder) {
-            return;
-        }
-
         event.preventDefault();
         event.stopPropagation();
-        treeFolderRow = folder;
-        contextDriveRow = null;
-
         document.querySelectorAll('.tree-folder.selected-row, .tree-drive.selected-row').forEach(function (row) {
             row.classList.remove('selected-row');
         });
         folder.classList.add('selected-row');
-
-        const renameButton = menu.querySelector('[data-context-action="rename"]');
-        if (renameButton) {
-            renameButton.disabled = false;
-        }
-
         resolveTreeFolder(folder).then(function (ok) {
             if (!ok) {
                 return;
+            }
+            const selectedInput = document.getElementById('context-selected-ids');
+            const renameButton = menu.querySelector('[data-context-action="rename"]');
+            if (selectedInput) {
+                selectedInput.value = folder.dataset.id;
+            }
+            if (renameButton) {
+                renameButton.disabled = false;
             }
             menu.style.left = event.pageX + 'px';
             menu.style.top = event.pageY + 'px';
@@ -368,61 +185,86 @@ document.addEventListener('DOMContentLoaded', function () {
                 driveMenu.classList.remove('visible');
             }
         });
-    }, true);
-
-    sidebar.addEventListener('contextmenu', function (event) {
-        const drive = event.target.closest('.tree-drive');
-        if (!drive) {
-            return;
-        }
-        contextDriveRow = drive;
-        treeFolderRow = null;
-    }, true);
-
-    if (driveMenu) {
-        driveMenu.addEventListener('click', function (event) {
-            const button = event.target.closest('[data-drive-action]');
-            if (!button) {
-                return;
-            }
-            if (button.dataset.driveAction === 'expand_drive') {
-                event.preventDefault();
-                event.stopPropagation();
-                hideMenus();
-                expandDrive(contextDriveRow);
-                return;
-            }
-            if (button.dataset.driveAction === 'collapse_drive') {
-                event.preventDefault();
-                event.stopPropagation();
-                hideMenus();
-                collapseDrive(contextDriveRow);
-            }
-        }, true);
     }
 
-    menu.addEventListener('click', function (event) {
-        if (!treeFolderRow) {
+    function wireTreeActions() {
+        if (!sidebar || sidebar.dataset.treeContextLite === '1') {
             return;
         }
+        sidebar.dataset.treeContextLite = '1';
+        let contextDriveRow = null;
 
-        const button = event.target.closest('[data-context-action]');
-        if (!button || button.disabled) {
-            return;
-        }
+        sidebar.addEventListener('click', function (event) {
+            const row = event.target.closest('.tree-drive,.tree-folder');
+            if (!row) {
+                return;
+            }
+            if (event.target.closest('.tree-toggle')) {
+                event.preventDefault();
+                event.stopPropagation();
+                if (row.dataset.loaded === '1') {
+                    if (row.classList.contains('tree-drive')) {
+                        removeDriveDescendants(row);
+                    }
+                } else {
+                    loadChildren(row);
+                }
+                return;
+            }
+            if (row.dataset.url) {
+                showToast('Opening folder. Loading files...');
+            }
+        }, true);
 
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-        openActionDialog(button.dataset.contextAction, button.textContent.trim());
-    }, true);
+        sidebar.addEventListener('contextmenu', function (event) {
+            const folder = event.target.closest('.tree-folder');
+            if (folder) {
+                openTreeFolderMenu(folder, event);
+                return;
+            }
+            const drive = event.target.closest('.tree-drive');
+            if (drive) {
+                contextDriveRow = drive;
+            }
+        }, true);
 
-    document.addEventListener('click', function (event) {
-        if (!menu.contains(event.target)) {
-            treeFolderRow = null;
+        if (driveMenu) {
+            driveMenu.addEventListener('click', function (event) {
+                const button = event.target.closest('[data-drive-action]');
+                if (!button) {
+                    return;
+                }
+                if (button.dataset.driveAction === 'expand_drive') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    driveMenu.classList.remove('visible');
+                    loadChildren(contextDriveRow);
+                }
+                if (button.dataset.driveAction === 'collapse_drive') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    driveMenu.classList.remove('visible');
+                    removeDriveDescendants(contextDriveRow);
+                }
+            }, true);
         }
-        if (driveMenu && !driveMenu.contains(event.target)) {
-            contextDriveRow = null;
-        }
-    });
+    }
+
+    function wireNavigationNotice() {
+        document.addEventListener('click', function (event) {
+            const link = event.target.closest('a[href*="files.php"], a[href^="?drive_id"], a[href*="drive_id="]');
+            if (!link || link.closest('.context-menu') || link.target === '_blank') {
+                return;
+            }
+            showToast('Loading files...');
+        }, true);
+        window.addEventListener('beforeunload', function () {
+            showToast('Loading...');
+        });
+    }
+
+    loadIgnoredFolderFilter();
+    ensureDriveMenuActions();
+    wireTreeActions();
+    wireNavigationNotice();
 });
