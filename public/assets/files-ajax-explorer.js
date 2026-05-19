@@ -71,6 +71,31 @@
             }
         }
 
+        function currentExplorerUrl(driveId, path, page, sort, dir) {
+            const url = new URL(window.location.href);
+            url.searchParams.set('drive_id', String(driveId));
+            url.searchParams.set('path', path || '');
+            url.searchParams.delete('expanded_drive_id');
+            url.searchParams.set('explorer_page', String(page || 1));
+            url.searchParams.set('sort', sort || 'name');
+            url.searchParams.set('dir', dir || 'asc');
+            url.hash = 'explorer-panel';
+            return url;
+        }
+
+        function syncReturnUrl(driveId, path, page, sort, dir) {
+            const input = document.querySelector('#context-form input[name="return_url"]');
+            if (!input) {
+                return;
+            }
+            const url = currentExplorerUrl(driveId || currentDriveId, path ?? currentPath, page || currentPage, sort || currentSort, dir || currentDir);
+            input.value = url.pathname + url.search + url.hash;
+        }
+
+        window.driveMasterSyncFilesReturnUrl = function () {
+            syncReturnUrl(currentDriveId, currentPath, currentPage, currentSort, currentDir);
+        };
+
         function driveRowFor(driveId) {
             return document.querySelector('.tree-drive[data-drive-id="' + String(driveId).replace(/"/g, '\\"') + '"]');
         }
@@ -203,20 +228,14 @@
         }
 
         function updateUrl(driveId, path, page, sort, dir, pushState) {
-            const url = new URL(window.location.href);
-            url.searchParams.set('drive_id', String(driveId));
-            url.searchParams.set('path', path || '');
-            url.searchParams.delete('expanded_drive_id');
-            url.searchParams.set('explorer_page', String(page || 1));
-            url.searchParams.set('sort', sort || 'name');
-            url.searchParams.set('dir', dir || 'asc');
-            url.hash = 'explorer-panel';
+            const url = currentExplorerUrl(driveId, path, page, sort, dir);
             const state = { driveId: Number(driveId), path: path || '', page: Number(page || 1), sort: sort || 'name', dir: dir || 'asc' };
             if (pushState) {
                 window.history.pushState(state, '', url.toString());
             } else {
                 window.history.replaceState(state, '', url.toString());
             }
+            syncReturnUrl(driveId, path, page, sort, dir);
         }
 
         function loadExplorer(driveId, path, page, sort, dir, pushState, message) {
@@ -234,6 +253,7 @@
             currentPage = page;
             currentSort = sort;
             currentDir = dir;
+            syncReturnUrl(currentDriveId, currentPath, currentPage, currentSort, currentDir);
             selectTreeRow(driveId, path);
 
             if (loading) {
@@ -261,6 +281,7 @@
                     currentPage = Number(data.page || page || 1);
                     currentSort = sort;
                     currentDir = dir;
+                    syncReturnUrl(currentDriveId, currentPath, currentPage, currentSort, currentDir);
                     breadcrumbs.innerHTML = data.breadcrumbs_html || '';
                     tbody.innerHTML = data.rows_html || '';
                     main.querySelectorAll('.ajax-explorer-pager').forEach(function (pager) { pager.remove(); });
