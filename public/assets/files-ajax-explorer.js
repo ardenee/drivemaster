@@ -31,7 +31,6 @@
         let loading = false;
         let queuedLoad = null;
         let treeClickTimer = null;
-        let toastHideTimer = null;
 
         function formatBytes(bytes) {
             bytes = Number(bytes || 0);
@@ -42,44 +41,6 @@
                 index++;
             }
             return index === 0 ? Math.round(bytes) + ' ' + units[index] : bytes.toFixed(2) + ' ' + units[index];
-        }
-
-        function ensureLoadingToast() {
-            let toast = document.getElementById('tree-loading-toast');
-            if (!toast) {
-                toast = document.createElement('div');
-                toast.id = 'tree-loading-toast';
-                toast.className = 'tree-loading-toast';
-                toast.setAttribute('role', 'status');
-                toast.setAttribute('aria-live', 'polite');
-                document.body.appendChild(toast);
-            }
-            return toast;
-        }
-
-        function showLoadingToast(text) {
-            const toast = ensureLoadingToast();
-            if (toastHideTimer) {
-                clearTimeout(toastHideTimer);
-                toastHideTimer = null;
-            }
-            toast.textContent = text || 'Loading folder data...';
-            toast.classList.add('visible');
-        }
-
-        function hideLoadingToast() {
-            const toast = document.getElementById('tree-loading-toast');
-            if (!toast) {
-                return;
-            }
-            if (toastHideTimer) {
-                clearTimeout(toastHideTimer);
-            }
-            toastHideTimer = setTimeout(function () {
-                if (!loading) {
-                    toast.classList.remove('visible');
-                }
-            }, 350);
         }
 
         function ensureOverlay() {
@@ -163,8 +124,7 @@
                     if (row.dataset.ajaxPath !== undefined) {
                         event.preventDefault();
                         event.stopPropagation();
-                        showLoadingToast('Opening folder. Loading files...');
-                        loadExplorer(Number(row.dataset.driveId || currentDriveId), row.dataset.ajaxPath || '', 1, currentSort, currentDir, true);
+                        loadExplorer(Number(row.dataset.driveId || currentDriveId), row.dataset.ajaxPath || '', 1, currentSort, currentDir, true, 'Opening folder. Loading files...');
                     }
                 });
             });
@@ -187,7 +147,7 @@
             }
         }
 
-        function loadExplorer(driveId, path, page, sort, dir, pushState) {
+        function loadExplorer(driveId, path, page, sort, dir, pushState, message) {
             driveId = Number(driveId || 0);
             path = path || '';
             page = Number(page || 1);
@@ -205,14 +165,13 @@
             setSelectedTreePath(driveId, path);
 
             if (loading) {
-                queuedLoad = { driveId: driveId, path: path, page: page, sort: sort, dir: dir, pushState: false };
-                showLoadingToast('Loading requested folder next...');
+                queuedLoad = { driveId: driveId, path: path, page: page, sort: sort, dir: dir, pushState: false, message: 'Loading requested folder next...' };
+                showOverlay('Loading requested folder next...');
                 return;
             }
 
             loading = true;
-            showLoadingToast('Loading folder data...');
-            showOverlay('Loading folder data...');
+            showOverlay(message || 'Loading folder data...');
             const params = new URLSearchParams();
             params.set('drive_id', String(driveId));
             params.set('path', path);
@@ -249,11 +208,10 @@
                 .finally(function () {
                     loading = false;
                     hideOverlay();
-                    hideLoadingToast();
                     if (queuedLoad) {
                         const next = queuedLoad;
                         queuedLoad = null;
-                        loadExplorer(next.driveId, next.path, next.page, next.sort, next.dir, next.pushState);
+                        loadExplorer(next.driveId, next.path, next.page, next.sort, next.dir, next.pushState, next.message);
                     }
                 });
         }
@@ -269,23 +227,20 @@
                 }
                 treeClickTimer = setTimeout(function () {
                     treeClickTimer = null;
-                    showLoadingToast('Opening folder. Loading files...');
-                    loadExplorer(Number(treeRow.dataset.driveId || currentDriveId), treeRow.dataset.path || '', 1, currentSort, currentDir, true);
+                    loadExplorer(Number(treeRow.dataset.driveId || currentDriveId), treeRow.dataset.path || '', 1, currentSort, currentDir, true, 'Opening folder. Loading files...');
                 }, 220);
                 return;
             }
             const breadcrumbLink = event.target.closest('.breadcrumbs a[data-ajax-path]');
             if (breadcrumbLink) {
                 event.preventDefault();
-                showLoadingToast('Opening folder. Loading files...');
-                loadExplorer(Number(breadcrumbLink.dataset.driveId || currentDriveId), breadcrumbLink.dataset.ajaxPath || '', 1, currentSort, currentDir, true);
+                loadExplorer(Number(breadcrumbLink.dataset.driveId || currentDriveId), breadcrumbLink.dataset.ajaxPath || '', 1, currentSort, currentDir, true, 'Opening folder. Loading files...');
                 return;
             }
             const pageLink = event.target.closest('[data-ajax-page]');
             if (pageLink) {
                 event.preventDefault();
-                showLoadingToast('Loading page...');
-                loadExplorer(currentDriveId, currentPath, Number(pageLink.dataset.ajaxPage || 1), currentSort, currentDir, true);
+                loadExplorer(currentDriveId, currentPath, Number(pageLink.dataset.ajaxPage || 1), currentSort, currentDir, true, 'Loading page...');
                 return;
             }
         }, true);
@@ -308,16 +263,14 @@
                 const sort = url.searchParams.get('sort') || 'name';
                 const dir = url.searchParams.get('dir') || 'asc';
                 event.preventDefault();
-                showLoadingToast('Sorting files...');
-                loadExplorer(currentDriveId, currentPath, 1, sort, dir, true);
+                loadExplorer(currentDriveId, currentPath, 1, sort, dir, true, 'Sorting files...');
             });
         });
 
         window.addEventListener('popstate', function (event) {
             const state = event.state;
             if (state && state.driveId) {
-                showLoadingToast('Loading folder data...');
-                loadExplorer(Number(state.driveId), state.path || '', Number(state.page || 1), state.sort || 'name', state.dir || 'asc', false);
+                loadExplorer(Number(state.driveId), state.path || '', Number(state.page || 1), state.sort || 'name', state.dir || 'asc', false, 'Loading folder data...');
             }
         });
 
