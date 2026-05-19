@@ -35,7 +35,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .button-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
 .nowrap { white-space: nowrap; }
 .explorer-wrap { display: grid; grid-template-columns: minmax(220px, 320px) minmax(0, 1fr); gap: 16px; align-items: start; }
-.explorer-sidebar { min-width: 0; max-height: 70vh; overflow: auto; border: 1px solid #d9e0e7; border-radius: 6px; background: #fbfdff; padding: 10px; }
+.explorer-sidebar { min-width: 0; overflow: auto; border: 1px solid #d9e0e7; border-radius: 6px; background: #fbfdff; padding: 10px; }
 .explorer-sidebar h3 { margin-top: 0; }
 .explorer-main { min-width: 0; overflow: hidden; }
 .explorer-main .explorer-table { width: 100%; }
