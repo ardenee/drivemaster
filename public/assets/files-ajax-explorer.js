@@ -43,13 +43,16 @@
 
         const urlParams = new URLSearchParams(window.location.search);
         const remembered = savedState();
-        let currentDriveId = Number(urlParams.get('drive_id') || document.querySelector('.tree-drive.selected')?.dataset.driveId || remembered?.driveId || 0);
-        let currentPath = urlParams.get('path') ?? remembered?.path ?? '';
+        const urlDriveId = Number(urlParams.get('drive_id') || 0);
+        const selectedDriveId = Number(document.querySelector('.tree-drive.selected')?.dataset.driveId || 0);
+        let currentDriveId = Number(urlDriveId || remembered?.driveId || selectedDriveId || 0);
+        let currentPath = urlParams.has('path') ? (urlParams.get('path') || '') : (remembered?.path || '');
         let currentPage = Number(urlParams.get('explorer_page') || remembered?.page || 1);
         let currentSort = urlParams.get('sort') || remembered?.sort || 'name';
         let currentDir = urlParams.get('dir') || remembered?.dir || 'asc';
         let loading = false;
         let queuedLoad = null;
+        let treeClickTimer = null;
 
         function formatBytes(bytes) {
             bytes = Number(bytes || 0);
@@ -241,7 +244,13 @@
                 event.preventDefault();
                 event.stopPropagation();
                 event.stopImmediatePropagation();
-                loadExplorer(Number(treeRow.dataset.driveId || currentDriveId), treeRow.dataset.path || '', 1, currentSort, currentDir, true);
+                if (treeClickTimer) {
+                    clearTimeout(treeClickTimer);
+                }
+                treeClickTimer = setTimeout(function () {
+                    treeClickTimer = null;
+                    loadExplorer(Number(treeRow.dataset.driveId || currentDriveId), treeRow.dataset.path || '', 1, currentSort, currentDir, true);
+                }, 220);
                 return;
             }
             const breadcrumbLink = event.target.closest('.breadcrumbs a[data-ajax-path]');
@@ -256,6 +265,19 @@
                 loadExplorer(currentDriveId, currentPath, Number(pageLink.dataset.ajaxPage || 1), currentSort, currentDir, true);
                 return;
             }
+        }, true);
+
+        explorerPanel.addEventListener('dblclick', function (event) {
+            const treeRow = event.target.closest('.tree-drive,.tree-folder');
+            if (!treeRow) {
+                return;
+            }
+            if (treeClickTimer) {
+                clearTimeout(treeClickTimer);
+                treeClickTimer = null;
+            }
+            event.preventDefault();
+            event.stopPropagation();
         }, true);
 
         table.querySelectorAll('thead a').forEach(function (link) {
@@ -277,7 +299,7 @@
 
         wireNewRows();
         updateUrl(currentDriveId, currentPath, currentPage, currentSort, currentDir, false);
-        const hasUrlDrive = Number(urlParams.get('drive_id') || 0) > 0;
+        const hasUrlDrive = urlDriveId > 0;
         if (!hasUrlDrive && remembered && Number(remembered.driveId) > 0) {
             loadExplorer(Number(remembered.driveId), remembered.path || '', Number(remembered.page || 1), remembered.sort || 'name', remembered.dir || 'asc', false);
         }
