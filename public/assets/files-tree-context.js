@@ -53,6 +53,14 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function hexToRgb(hex) {
+        const match = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '');
+        if (!match) {
+            return null;
+        }
+        return { r: parseInt(match[1], 16), g: parseInt(match[2], 16), b: parseInt(match[3], 16) };
+    }
+
     function ensureDriveMenuActions() {
         if (!driveMenu || driveMenu.dataset.expandActionsAdded === '1') {
             return;
@@ -72,8 +80,42 @@ document.addEventListener('DOMContentLoaded', function () {
         driveMenu.insertBefore(separator, collapseButton.nextSibling);
     }
 
+    function ensureFolderMenuActions() {
+        if (!menu || menu.dataset.treeExpandActionsAdded === '1') {
+            return;
+        }
+        menu.dataset.treeExpandActionsAdded = '1';
+        const expandButton = document.createElement('button');
+        expandButton.type = 'button';
+        expandButton.dataset.contextAction = 'expand_folder';
+        expandButton.textContent = 'Expand Folder';
+        const collapseButton = document.createElement('button');
+        collapseButton.type = 'button';
+        collapseButton.dataset.contextAction = 'collapse_folder';
+        collapseButton.textContent = 'Collapse Folder';
+        const separator = document.createElement('hr');
+        menu.insertBefore(expandButton, menu.firstChild);
+        menu.insertBefore(collapseButton, expandButton.nextSibling);
+        menu.insertBefore(separator, collapseButton.nextSibling);
+    }
+
     function treeLevel(row) {
         return Number(row.dataset.level || (row.classList.contains('tree-drive') ? -1 : 0));
+    }
+
+    function removeDescendants(row) {
+        const level = treeLevel(row);
+        let next = row.nextElementSibling;
+        while (next && next.classList.contains('tree-folder') && treeLevel(next) > level) {
+            const remove = next;
+            next = next.nextElementSibling;
+            remove.remove();
+        }
+        const toggle = row.querySelector('.tree-toggle');
+        if (toggle) {
+            toggle.textContent = '▸';
+        }
+        row.dataset.loaded = '0';
     }
 
     function removeDriveDescendants(driveRow) {
@@ -100,6 +142,7 @@ document.addEventListener('DOMContentLoaded', function () {
             anchor = node;
         });
         loadIgnoredFolderFilter();
+        applyTreeCategoryColours(nodes);
         return nodes;
     }
 
@@ -123,6 +166,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
                 if (row.classList.contains('tree-drive')) {
                     removeDriveDescendants(row);
+                } else {
+                    removeDescendants(row);
                 }
                 const nodes = insertChildrenAfter(row, data.html || '');
                 row.dataset.loaded = '1';
@@ -145,6 +190,21 @@ document.addEventListener('DOMContentLoaded', function () {
                 return promise.then(function () { return expandAllFolders(child); });
             }, Promise.resolve());
         });
+    }
+
+    function toggleFolder(row) {
+        if (!row) {
+            return;
+        }
+        if (row.dataset.loaded === '1') {
+            if (row.classList.contains('tree-drive')) {
+                removeDriveDescendants(row);
+            } else {
+                removeDescendants(row);
+            }
+        } else {
+            loadChildren(row);
+        }
     }
 
     function resolveTreeFolder(row) {
@@ -185,6 +245,8 @@ document.addEventListener('DOMContentLoaded', function () {
             row.classList.remove('selected-row');
         });
         folder.classList.add('selected-row');
+        menu.dataset.treeFolderMenu = '1';
+        window.__driveMasterContextFolderRow = folder;
         resolveTreeFolder(folder).then(function (ok) {
             if (!ok) {
                 return;
@@ -206,6 +268,39 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function applyTreeCategoryColours(rows) {
+        const candidates = Array.from(rows && rows.length ? rows : document.querySelectorAll('.tree-folder')).filter(function (row) {
+            return row.dataset.id && row.dataset.categoryColourApplied !== '1';
+        });
+        if (!candidates.length) {
+            return;
+        }
+        const ids = candidates.map(function (row) { return row.dataset.id; }).join(',');
+        fetch('files-entry-category-colors.php?ids=' + encodeURIComponent(ids), { cache: 'no-store' })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (!data.ok || !data.colors) {
+                    return;
+                }
+                candidates.forEach(function (row) {
+                    const list = data.colors[row.dataset.id] || [];
+                    if (!list.length) {
+                        row.dataset.categoryColourApplied = '1';
+                        return;
+                    }
+                    const rgb = hexToRgb(list[0].color);
+                    if (!rgb) {
+                        return;
+                    }
+                    row.style.backgroundColor = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.18)';
+                    row.style.borderLeft = '4px solid rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.85)';
+                    row.title = 'Category: ' + list.map(function (item) { return item.name; }).join(', ');
+                    row.dataset.categoryColourApplied = '1';
+                });
+            })
+            .catch(function () {});
+    }
+
     function wireTreeActions() {
         if (!sidebar || sidebar.dataset.treeContextLite === '1') {
             return;
@@ -221,18 +316,23 @@ document.addEventListener('DOMContentLoaded', function () {
             if (event.target.closest('.tree-toggle')) {
                 event.preventDefault();
                 event.stopPropagation();
-                if (row.dataset.loaded === '1') {
-                    if (row.classList.contains('tree-drive')) {
-                        removeDriveDescendants(row);
-                    }
-                } else {
-                    loadChildren(row);
-                }
+                toggleFolder(row);
                 return;
             }
             if (row.dataset.url) {
                 showToast('Opening folder. Loading files...');
             }
+        }, true);
+
+        sidebar.addEventListener('dblclick', function (event) {
+            const row = event.target.closest('.tree-drive,.tree-folder');
+            if (!row) {
+                return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            toggleFolder(row);
         }, true);
 
         sidebar.addEventListener('contextmenu', function (event) {
@@ -246,6 +346,31 @@ document.addEventListener('DOMContentLoaded', function () {
                 contextDriveRow = drive;
             }
         }, true);
+
+        if (menu) {
+            menu.addEventListener('click', function (event) {
+                const button = event.target.closest('[data-context-action]');
+                if (!button || !menu.dataset.treeFolderMenu) {
+                    return;
+                }
+                const folder = window.__driveMasterContextFolderRow || null;
+                if (button.dataset.contextAction === 'expand_folder') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.stopImmediatePropagation();
+                    menu.classList.remove('visible');
+                    expandAllFolders(folder);
+                    return;
+                }
+                if (button.dataset.contextAction === 'collapse_folder') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.stopImmediatePropagation();
+                    menu.classList.remove('visible');
+                    removeDescendants(folder);
+                }
+            }, true);
+        }
 
         if (driveMenu) {
             driveMenu.addEventListener('click', function (event) {
@@ -286,6 +411,8 @@ document.addEventListener('DOMContentLoaded', function () {
     loadIgnoredFolderFilter();
     loadAjaxExplorerController();
     ensureDriveMenuActions();
+    ensureFolderMenuActions();
     wireTreeActions();
     wireNavigationNotice();
+    applyTreeCategoryColours();
 });
