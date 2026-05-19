@@ -36,6 +36,17 @@ document.addEventListener('DOMContentLoaded', function () {
         document.head.appendChild(script);
     }
 
+    function loadCompactStatusController() {
+        if (window.__driveMasterCompactExplorerStatusLoaded) {
+            return;
+        }
+        window.__driveMasterCompactExplorerStatusLoaded = true;
+        const script = document.createElement('script');
+        script.src = 'assets/files-status-compact.js?ts=' + Date.now();
+        script.defer = true;
+        document.head.appendChild(script);
+    }
+
     function showToast(text) {
         let toast = document.getElementById('tree-loading-toast');
         if (!toast) {
@@ -360,6 +371,7 @@ document.addEventListener('DOMContentLoaded', function () {
     loadIgnoredFolderFilter();
     loadAjaxExplorerController();
     loadContextActionsController();
+    loadCompactStatusController();
     ensureDriveMenuActions();
     ensureFolderMenuActions();
     wireTreeActions();
