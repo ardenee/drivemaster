@@ -2,7 +2,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const sidebar = document.querySelector('.explorer-sidebar');
     const menu = document.getElementById('context-menu');
     const driveMenu = document.getElementById('drive-context-menu');
-    const dialog = document.getElementById('context-dialog');
 
     function loadIgnoredFolderFilter() {
         if (window.__driveMasterIgnoredFolderFilterLoaded) {
@@ -26,6 +25,17 @@ document.addEventListener('DOMContentLoaded', function () {
         document.head.appendChild(script);
     }
 
+    function loadContextActionsController() {
+        if (window.__driveMasterFilesContextActionsLoaded) {
+            return;
+        }
+        window.__driveMasterFilesContextActionsLoaded = true;
+        const script = document.createElement('script');
+        script.src = 'assets/files-context-actions.js?ts=' + Date.now();
+        script.defer = true;
+        document.head.appendChild(script);
+    }
+
     function showToast(text) {
         let toast = document.getElementById('tree-loading-toast');
         if (!toast) {
@@ -39,9 +49,7 @@ document.addEventListener('DOMContentLoaded', function () {
         toast.textContent = text || 'Loading folder data...';
         toast.classList.add('visible');
         clearTimeout(window.__driveMasterTreeToastTimer);
-        window.__driveMasterTreeToastTimer = setTimeout(function () {
-            toast.classList.remove('visible');
-        }, 1200);
+        window.__driveMasterTreeToastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1200);
     }
 
     function getUrlParam(row, key) {
@@ -104,6 +112,9 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function removeDescendants(row) {
+        if (!row) {
+            return;
+        }
         const level = treeLevel(row);
         let next = row.nextElementSibling;
         while (next && next.classList.contains('tree-folder') && treeLevel(next) > level) {
@@ -119,6 +130,9 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function removeDriveDescendants(driveRow) {
+        if (!driveRow) {
+            return;
+        }
         let next = driveRow.nextElementSibling;
         while (next && next.classList.contains('tree-folder')) {
             const remove = next;
@@ -147,6 +161,9 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function loadChildren(row) {
+        if (!row) {
+            return Promise.resolve([]);
+        }
         const driveId = row.classList.contains('tree-drive') ? row.dataset.driveId : (row.dataset.driveId || getUrlParam(row, 'drive_id'));
         const parentPath = row.classList.contains('tree-drive') ? '' : (row.dataset.path || getUrlParam(row, 'path'));
         const level = row.classList.contains('tree-drive') ? -1 : treeLevel(row);
@@ -205,67 +222,6 @@ document.addEventListener('DOMContentLoaded', function () {
         } else {
             loadChildren(row);
         }
-    }
-
-    function resolveTreeFolder(row) {
-        if (row.dataset.id) {
-            return Promise.resolve(true);
-        }
-        const driveId = row.dataset.driveId || getUrlParam(row, 'drive_id');
-        const path = row.dataset.path || getUrlParam(row, 'path');
-        if (!driveId || !path) {
-            return Promise.resolve(false);
-        }
-        showToast('Loading folder details...');
-        return fetch('tree-resolve.php?drive_id=' + encodeURIComponent(driveId) + '&path=' + encodeURIComponent(path), { cache: 'no-store' })
-            .then(function (response) { return response.json(); })
-            .then(function (data) {
-                if (!data.ok) {
-                    return false;
-                }
-                row.dataset.id = String(data.id);
-                row.dataset.entryType = 'folder';
-                row.dataset.entryName = data.name || row.textContent.trim().replace(/[▸▾·…📁]/g, '').trim();
-                row.dataset.size = '0';
-                row.dataset.isFile = '0';
-                row.dataset.driveId = driveId;
-                row.dataset.path = path;
-                return true;
-            })
-            .catch(function () { return false; });
-    }
-
-    function openTreeFolderMenu(folder, event) {
-        if (!menu) {
-            return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        document.querySelectorAll('.tree-folder.selected-row, .tree-drive.selected-row').forEach(function (row) {
-            row.classList.remove('selected-row');
-        });
-        folder.classList.add('selected-row');
-        menu.dataset.treeFolderMenu = '1';
-        window.__driveMasterContextFolderRow = folder;
-        resolveTreeFolder(folder).then(function (ok) {
-            if (!ok) {
-                return;
-            }
-            const selectedInput = document.getElementById('context-selected-ids');
-            const renameButton = menu.querySelector('[data-context-action="rename"]');
-            if (selectedInput) {
-                selectedInput.value = folder.dataset.id;
-            }
-            if (renameButton) {
-                renameButton.disabled = false;
-            }
-            menu.style.left = event.pageX + 'px';
-            menu.style.top = event.pageY + 'px';
-            menu.classList.add('visible');
-            if (driveMenu) {
-                driveMenu.classList.remove('visible');
-            }
-        });
     }
 
     function applyTreeCategoryColours(rows) {
@@ -336,11 +292,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }, true);
 
         sidebar.addEventListener('contextmenu', function (event) {
-            const folder = event.target.closest('.tree-folder');
-            if (folder) {
-                openTreeFolderMenu(folder, event);
-                return;
-            }
             const drive = event.target.closest('.tree-drive');
             if (drive) {
                 contextDriveRow = drive;
@@ -353,7 +304,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (!button || !menu.dataset.treeFolderMenu) {
                     return;
                 }
-                const folder = window.__driveMasterContextFolderRow || null;
+                const folder = window.__driveMasterContextFolderRow || document.querySelector('.tree-folder.selected-row');
                 if (button.dataset.contextAction === 'expand_folder') {
                     event.preventDefault();
                     event.stopPropagation();
@@ -383,13 +334,13 @@ document.addEventListener('DOMContentLoaded', function () {
                     event.stopPropagation();
                     driveMenu.classList.remove('visible');
                     showToast('Expanding full drive tree...');
-                    expandAllFolders(contextDriveRow);
+                    expandAllFolders(contextDriveRow || document.querySelector('.tree-drive.selected-row'));
                 }
                 if (button.dataset.driveAction === 'collapse_drive') {
                     event.preventDefault();
                     event.stopPropagation();
                     driveMenu.classList.remove('visible');
-                    removeDriveDescendants(contextDriveRow);
+                    removeDriveDescendants(contextDriveRow || document.querySelector('.tree-drive.selected-row'));
                 }
             }, true);
         }
@@ -403,13 +354,12 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             showToast('Loading files...');
         }, true);
-        window.addEventListener('beforeunload', function () {
-            showToast('Loading...');
-        });
+        window.addEventListener('beforeunload', function () { showToast('Loading...'); });
     }
 
     loadIgnoredFolderFilter();
     loadAjaxExplorerController();
+    loadContextActionsController();
     ensureDriveMenuActions();
     ensureFolderMenuActions();
     wireTreeActions();
