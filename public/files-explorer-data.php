@@ -30,16 +30,31 @@ function fed_link(array $params = []): string
     return 'files.php?' . http_build_query($params) . '#explorer-panel';
 }
 
-function fed_badge_style(?string $colorHex): string
+function fed_rgb(?string $colorHex): ?array
 {
     $colorHex = (string)$colorHex;
     if (!preg_match('/^#[0-9a-fA-F]{6}$/', $colorHex)) {
+        return null;
+    }
+    return [hexdec(substr($colorHex, 1, 2)), hexdec(substr($colorHex, 3, 2)), hexdec(substr($colorHex, 5, 2))];
+}
+
+function fed_badge_style(?string $colorHex): string
+{
+    $rgb = fed_rgb($colorHex);
+    if (!$rgb) {
         return '';
     }
-    $r = hexdec(substr($colorHex, 1, 2));
-    $g = hexdec(substr($colorHex, 3, 2));
-    $b = hexdec(substr($colorHex, 5, 2));
-    return ' style="background-color: rgba(' . $r . ',' . $g . ',' . $b . ',0.55); border-color: rgba(' . $r . ',' . $g . ',' . $b . ',0.85);"';
+    return ' style="background-color: rgba(' . $rgb[0] . ',' . $rgb[1] . ',' . $rgb[2] . ',0.55); border-color: rgba(' . $rgb[0] . ',' . $rgb[1] . ',' . $rgb[2] . ',0.85);"';
+}
+
+function fed_row_style(?string $colorHex): string
+{
+    $rgb = fed_rgb($colorHex);
+    if (!$rgb) {
+        return '';
+    }
+    return ' style="background-color: rgba(' . $rgb[0] . ',' . $rgb[1] . ',' . $rgb[2] . ',0.16); border-left: 4px solid rgba(' . $rgb[0] . ',' . $rgb[1] . ',' . $rgb[2] . ',0.85);"';
 }
 
 function fed_category_badges(array $entryIds): array
@@ -64,7 +79,7 @@ function fed_category_badges(array $entryIds): array
         JOIN categories c ON c.id = cr.category_id AND c.is_active = 1
         WHERE f.id IN ({$placeholders}) AND {$visibleSql}
         AND ((cr.rule_type = 'extension' AND cr.pattern = f.extension) OR (cr.rule_type = 'folder_path' AND (f.relative_path = cr.pattern OR f.relative_path LIKE CONCAT(cr.pattern, '/%'))) OR (cr.rule_type = 'path_contains' AND f.relative_path LIKE CONCAT('%', cr.pattern, '%')) OR (cr.rule_type = 'name_contains' AND f.name LIKE CONCAT('%', cr.pattern, '%')))
-        ORDER BY category_name, source
+        ORDER BY source ASC, category_name ASC
     ";
     $stmt = db()->prepare($sql);
     $stmt->execute(array_merge($entryIds, $entryIds));
@@ -78,7 +93,10 @@ function fed_category_badges(array $entryIds): array
         }
         $seen[$key] = true;
         $source = $row['source'] === 'manual' ? 'manual' : 'rule';
-        $map[$entryId][] = '<span class="category-badge category-' . e($source) . '" title="' . e($source) . ': ' . e((string)$row['category_name']) . '"' . fed_badge_style((string)($row['color_hex'] ?? '')) . '>' . e((string)$row['category_name']) . '</span>';
+        if (!isset($map[$entryId])) {
+            $map[$entryId] = ['badges' => [], 'row_color' => (string)($row['color_hex'] ?? '')];
+        }
+        $map[$entryId]['badges'][] = '<span class="category-badge category-' . e($source) . '" title="' . e($source) . ': ' . e((string)$row['category_name']) . '"' . fed_badge_style((string)($row['color_hex'] ?? '')) . '>' . e((string)$row['category_name']) . '</span>';
     }
     return $map;
 }
@@ -147,9 +165,11 @@ try {
         $rows .= '<tr class="explorer-row" data-url="' . e(fed_link(['drive_id' => $driveId, 'path' => fed_parent($path), 'expanded_drive_id' => $driveId, 'explorer_page' => 1])) . '" data-ajax-path="' . e(fed_parent($path)) . '" data-drive-id="' . e((string)$driveId) . '"><td>↩ ..</td><td>Folder</td><td></td><td></td><td></td></tr>';
     }
     foreach ($children as $entry) {
+        $entryId = (int)$entry['id'];
+        $entryCategory = $categoryMap[$entryId] ?? ['badges' => [], 'row_color' => ''];
         $entryUrl = $entry['entry_type'] === 'folder' ? fed_link(['drive_id' => $driveId, 'path' => $entry['relative_path'], 'expanded_drive_id' => $driveId, 'selected_entry_id' => null, 'explorer_page' => 1]) : '';
-        $badges = implode(' ', $categoryMap[(int)$entry['id']] ?? []);
-        $rows .= '<tr id="entry-' . e((string)$entry['id']) . '" class="explorer-row selectable-row" data-id="' . e((string)$entry['id']) . '" data-entry-type="' . e((string)$entry['entry_type']) . '" data-entry-name="' . e((string)$entry['name']) . '" data-url="' . e($entryUrl) . '" data-ajax-path="' . e($entry['entry_type'] === 'folder' ? (string)$entry['relative_path'] : '') . '" data-drive-id="' . e((string)$driveId) . '" data-size="' . e((string)(int)$entry['size_bytes']) . '" data-is-file="' . ($entry['entry_type'] === 'file' ? '1' : '0') . '">';
+        $badges = implode(' ', $entryCategory['badges'] ?? []);
+        $rows .= '<tr id="entry-' . e((string)$entryId) . '" class="explorer-row selectable-row"' . fed_row_style((string)($entryCategory['row_color'] ?? '')) . ' data-id="' . e((string)$entryId) . '" data-entry-type="' . e((string)$entry['entry_type']) . '" data-entry-name="' . e((string)$entry['name']) . '" data-url="' . e($entryUrl) . '" data-ajax-path="' . e($entry['entry_type'] === 'folder' ? (string)$entry['relative_path'] : '') . '" data-drive-id="' . e((string)$driveId) . '" data-size="' . e((string)(int)$entry['size_bytes']) . '" data-is-file="' . ($entry['entry_type'] === 'file' ? '1' : '0') . '">';
         $rows .= '<td>' . ($entry['entry_type'] === 'folder' ? '📁' : '📄') . ' ' . e((string)$entry['name']) . '</td><td>' . e($entry['entry_type'] === 'folder' ? 'Folder' : strtoupper((string)$entry['extension']) . ' File') . '</td><td>' . $badges . '</td><td>' . ($entry['entry_type'] === 'file' ? e(format_bytes((int)$entry['size_bytes'])) : '') . '</td><td>' . e((string)$entry['modified_at']) . '</td></tr>';
     }
     if (!$children) {
