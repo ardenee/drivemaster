@@ -15,6 +15,17 @@ document.addEventListener('DOMContentLoaded', function () {
         document.head.appendChild(script);
     }
 
+    function loadAjaxExplorerController() {
+        if (window.__driveMasterAjaxExplorerLoaded) {
+            return;
+        }
+        window.__driveMasterAjaxExplorerLoaded = true;
+        const script = document.createElement('script');
+        script.src = 'assets/files-ajax-explorer.js?ts=' + Date.now();
+        script.defer = true;
+        document.head.appendChild(script);
+    }
+
     function showToast(text) {
         let toast = document.getElementById('tree-loading-toast');
         if (!toast) {
@@ -128,6 +139,14 @@ document.addEventListener('DOMContentLoaded', function () {
             });
     }
 
+    function expandAllFolders(row) {
+        return loadChildren(row).then(function (children) {
+            return children.reduce(function (promise, child) {
+                return promise.then(function () { return expandAllFolders(child); });
+            }, Promise.resolve());
+        });
+    }
+
     function resolveTreeFolder(row) {
         if (row.dataset.id) {
             return Promise.resolve(true);
@@ -238,7 +257,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     event.preventDefault();
                     event.stopPropagation();
                     driveMenu.classList.remove('visible');
-                    loadChildren(contextDriveRow);
+                    showToast('Expanding full drive tree...');
+                    expandAllFolders(contextDriveRow);
                 }
                 if (button.dataset.driveAction === 'collapse_drive') {
                     event.preventDefault();
@@ -264,6 +284,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     loadIgnoredFolderFilter();
+    loadAjaxExplorerController();
     ensureDriveMenuActions();
     wireTreeActions();
     wireNavigationNotice();
