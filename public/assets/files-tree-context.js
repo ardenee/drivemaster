@@ -47,20 +47,40 @@ document.addEventListener('DOMContentLoaded', function () {
         document.head.appendChild(script);
     }
 
-    function showToast(text) {
-        let toast = document.getElementById('tree-loading-toast');
-        if (!toast) {
-            toast = document.createElement('div');
-            toast.id = 'tree-loading-toast';
-            toast.className = 'tree-loading-toast';
-            toast.setAttribute('role', 'status');
-            toast.setAttribute('aria-live', 'polite');
-            document.body.appendChild(toast);
+    function removeOldTopRightToast() {
+        const toast = document.getElementById('tree-loading-toast');
+        if (toast) {
+            toast.remove();
         }
-        toast.textContent = text || 'Loading folder data...';
-        toast.classList.add('visible');
-        clearTimeout(window.__driveMasterTreeToastTimer);
-        window.__driveMasterTreeToastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1200);
+    }
+
+    function ensureOverlay() {
+        removeOldTopRightToast();
+        let overlay = document.getElementById('ajax-explorer-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'ajax-explorer-overlay';
+            overlay.className = 'ajax-explorer-overlay';
+            overlay.innerHTML = '<div class="ajax-explorer-overlay-box">Loading folder data...</div>';
+            document.body.appendChild(overlay);
+        }
+        return overlay;
+    }
+
+    function showOverlay(text) {
+        const overlay = ensureOverlay();
+        const box = overlay.querySelector('.ajax-explorer-overlay-box');
+        if (box) {
+            box.textContent = text || 'Loading folder data...';
+        }
+        overlay.classList.add('visible');
+    }
+
+    function hideOverlay() {
+        const overlay = document.getElementById('ajax-explorer-overlay');
+        if (overlay) {
+            overlay.classList.remove('visible');
+        }
     }
 
     function getUrlParam(row, key) {
@@ -122,6 +142,13 @@ document.addEventListener('DOMContentLoaded', function () {
         return Number(row.dataset.level || (row.classList.contains('tree-drive') ? -1 : 0));
     }
 
+    function setToggle(row, value) {
+        const toggle = row ? row.querySelector('.tree-toggle') : null;
+        if (toggle) {
+            toggle.textContent = value;
+        }
+    }
+
     function removeDescendants(row) {
         if (!row) {
             return;
@@ -133,10 +160,7 @@ document.addEventListener('DOMContentLoaded', function () {
             next = next.nextElementSibling;
             remove.remove();
         }
-        const toggle = row.querySelector('.tree-toggle');
-        if (toggle) {
-            toggle.textContent = '▸';
-        }
+        setToggle(row, '▸');
         row.dataset.loaded = '0';
     }
 
@@ -150,10 +174,7 @@ document.addEventListener('DOMContentLoaded', function () {
             next = next.nextElementSibling;
             remove.remove();
         }
-        const toggle = driveRow.querySelector('.tree-toggle');
-        if (toggle) {
-            toggle.textContent = '▸';
-        }
+        setToggle(driveRow, '▸');
         driveRow.dataset.loaded = '0';
     }
 
@@ -171,7 +192,7 @@ document.addEventListener('DOMContentLoaded', function () {
         return nodes;
     }
 
-    function loadChildren(row) {
+    function loadChildren(row, message) {
         if (!row) {
             return Promise.resolve([]);
         }
@@ -181,11 +202,8 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!driveId) {
             return Promise.resolve([]);
         }
-        const toggle = row.querySelector('.tree-toggle');
-        if (toggle) {
-            toggle.textContent = '…';
-        }
-        showToast('Loading folder data...');
+        setToggle(row, '…');
+        showOverlay(message || 'Loading folder data...');
         return fetch('files-tree-children.php?drive_id=' + encodeURIComponent(driveId) + '&parent_path=' + encodeURIComponent(parentPath || '') + '&level=' + encodeURIComponent(level), { cache: 'no-store' })
             .then(function (response) { return response.json(); })
             .then(function (data) {
@@ -198,25 +216,31 @@ document.addEventListener('DOMContentLoaded', function () {
                     removeDescendants(row);
                 }
                 const nodes = insertChildrenAfter(row, data.html || '');
-                row.dataset.loaded = '1';
-                if (toggle) {
-                    toggle.textContent = nodes.length ? '▾' : '·';
-                }
+                row.dataset.loaded = nodes.length ? '1' : '0';
+                setToggle(row, nodes.length ? '▾' : '·');
                 return nodes;
             })
             .catch(function () {
-                if (toggle) {
-                    toggle.textContent = '▸';
-                }
+                row.dataset.loaded = '0';
+                setToggle(row, '▸');
                 return [];
+            })
+            .finally(function () {
+                hideOverlay();
             });
     }
 
     function expandAllFolders(row) {
-        return loadChildren(row).then(function (children) {
+        if (!row) {
+            return Promise.resolve();
+        }
+        showOverlay('Expanding folder tree...');
+        return loadChildren(row, 'Expanding folder tree...').then(function (children) {
             return children.reduce(function (promise, child) {
                 return promise.then(function () { return expandAllFolders(child); });
             }, Promise.resolve());
+        }).finally(function () {
+            hideOverlay();
         });
     }
 
@@ -231,7 +255,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 removeDescendants(row);
             }
         } else {
-            loadChildren(row);
+            loadChildren(row, row.classList.contains('tree-drive') ? 'Loading drive folders...' : 'Loading folder data...');
         }
     }
 
@@ -283,11 +307,9 @@ document.addEventListener('DOMContentLoaded', function () {
             if (event.target.closest('.tree-toggle')) {
                 event.preventDefault();
                 event.stopPropagation();
+                event.stopImmediatePropagation();
                 toggleFolder(row);
                 return;
-            }
-            if (row.dataset.url) {
-                showToast('Opening folder. Loading files...');
             }
         }, true);
 
@@ -343,13 +365,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (button.dataset.driveAction === 'expand_drive') {
                     event.preventDefault();
                     event.stopPropagation();
+                    event.stopImmediatePropagation();
                     driveMenu.classList.remove('visible');
-                    showToast('Expanding full drive tree...');
                     expandAllFolders(contextDriveRow || document.querySelector('.tree-drive.selected-row'));
                 }
                 if (button.dataset.driveAction === 'collapse_drive') {
                     event.preventDefault();
                     event.stopPropagation();
+                    event.stopImmediatePropagation();
                     driveMenu.classList.remove('visible');
                     removeDriveDescendants(contextDriveRow || document.querySelector('.tree-drive.selected-row'));
                 }
@@ -358,16 +381,13 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function wireNavigationNotice() {
-        document.addEventListener('click', function (event) {
-            const link = event.target.closest('a[href*="files.php"], a[href^="?drive_id"], a[href*="drive_id="]');
-            if (!link || link.closest('.context-menu') || link.target === '_blank') {
-                return;
-            }
-            showToast('Loading files...');
-        }, true);
-        window.addEventListener('beforeunload', function () { showToast('Loading...'); });
+        window.addEventListener('beforeunload', function () {
+            removeOldTopRightToast();
+            showOverlay('Loading...');
+        });
     }
 
+    removeOldTopRightToast();
     loadIgnoredFolderFilter();
     loadAjaxExplorerController();
     loadContextActionsController();
