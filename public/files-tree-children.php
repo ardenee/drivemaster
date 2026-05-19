@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/src/bootstrap.php';
 
+use DriveMaster\Support\IgnoredFolderSql;
+
 function ftc_parent_expr(): string
 {
     return "CASE WHEN LOCATE('/', relative_path) = 0 THEN '' ELSE SUBSTRING(relative_path, 1, LENGTH(relative_path) - LENGTH(SUBSTRING_INDEX(relative_path, '/', -1)) - 1) END";
@@ -26,7 +28,8 @@ try {
     }
 
     $expr = ftc_parent_expr();
-    $stmt = db()->prepare("SELECT id, name, relative_path FROM file_entries WHERE drive_id = ? AND is_missing = 0 AND entry_type = 'folder' AND {$expr} = ? ORDER BY name ASC LIMIT 1000");
+    $visibleSql = IgnoredFolderSql::excludeCondition('f');
+    $stmt = db()->prepare("SELECT id, name, relative_path FROM file_entries f WHERE drive_id = ? AND is_missing = 0 AND entry_type = 'folder' AND {$visibleSql} AND {$expr} = ? ORDER BY name ASC LIMIT 1000");
     $stmt->execute([$driveId, $parentPath]);
 
     $html = '';
