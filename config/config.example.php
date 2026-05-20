@@ -14,5 +14,6 @@ return [
     'app' => [
         'name' => 'DriveMaster',
         'timezone' => 'Europe/Dublin',
+        'enable_real_file_moves' => false,
     ],
 ];
