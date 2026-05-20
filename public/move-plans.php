@@ -7,6 +7,11 @@ require __DIR__ . '/_layout.php';
 
 $message = null;
 $error = null;
+$statusFilter = (string)($_GET['status'] ?? 'active');
+$allowedStatuses = ['active', 'all', 'building', 'draft', 'validated', 'blocked', 'archived'];
+if (!in_array($statusFilter, $allowedStatuses, true)) {
+    $statusFilter = 'active';
+}
 $saved = (int)($_GET['saved'] ?? 0);
 if ($saved > 0) {
     $message = 'Plan snapshot saved: ' . $saved;
@@ -41,15 +46,8 @@ function mp_builder_url(array $plan): string
 
 function mp_json_flags(?string $json): string
 {
-    if (!$json) {
-        return '';
-    }
-    try {
-        $data = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
-    } catch (Throwable) {
-        return '';
-    }
-    if (!is_array($data)) {
+    $data = mp_json_array($json);
+    if (!$data) {
         return '';
     }
     $flags = [];
@@ -66,6 +64,11 @@ function mp_json_warning_count(?string $json): int
     return count(array_filter(mp_json_array($json)));
 }
 
+function mp_status_link(string $status, string $label, string $current): string
+{
+    return '<a class="button' . ($status === $current ? ' selected-row' : '') . '" href="move-plans.php?status=' . e($status) . '">' . e($label) . '</a>';
+}
+
 try {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = (string)($_POST['action'] ?? '');
@@ -73,13 +76,13 @@ try {
         if ($action === 'archive_plan' && $id > 0) {
             $stmt = db()->prepare("UPDATE move_plans SET status = 'archived' WHERE id = ? AND status <> 'archived'");
             $stmt->execute([$id]);
-            header('Location: move-plans.php');
+            header('Location: move-plans.php?status=' . urlencode($statusFilter));
             exit;
         }
         if ($action === 'delete_plan' && $id > 0) {
             $stmt = db()->prepare('DELETE FROM move_plans WHERE id = ?');
             $stmt->execute([$id]);
-            header('Location: move-plans.php');
+            header('Location: move-plans.php?status=' . urlencode($statusFilter));
             exit;
         }
     }
@@ -87,7 +90,17 @@ try {
     $error = $e->getMessage();
 }
 
-$plans = db()->query('SELECT * FROM move_plans ORDER BY id DESC LIMIT 100')->fetchAll();
+$where = '';
+$params = [];
+if ($statusFilter === 'active') {
+    $where = "WHERE status <> 'archived'";
+} elseif ($statusFilter !== 'all') {
+    $where = 'WHERE status = ?';
+    $params[] = $statusFilter;
+}
+$stmt = db()->prepare("SELECT * FROM move_plans {$where} ORDER BY id DESC LIMIT 100");
+$stmt->execute($params);
+$plans = $stmt->fetchAll();
 
 render_header('Saved Move Plans');
 ?>
@@ -98,6 +111,7 @@ render_header('Saved Move Plans');
     <h2>Saved move plans</h2>
     <p class="muted">Read-only move plan snapshots. Building plans can be resumed from here.</p>
     <div class="button-row"><a class="button" href="move-planner.php">Move Planner</a> <a class="button" href="plan-builder.php">Plan Builder</a></div>
+    <div class="button-row"><?= mp_status_link('active', 'Active', $statusFilter) ?> <?= mp_status_link('building', 'Building', $statusFilter) ?> <?= mp_status_link('draft', 'Draft', $statusFilter) ?> <?= mp_status_link('validated', 'Validated', $statusFilter) ?> <?= mp_status_link('blocked', 'Blocked', $statusFilter) ?> <?= mp_status_link('archived', 'Archived', $statusFilter) ?> <?= mp_status_link('all', 'All', $statusFilter) ?></div>
     <div class="table-scroll">
         <table class="auto-table compact-table">
             <thead><tr><th>ID</th><th>Status</th><th>Created</th><th>Categories</th><th>Target drives</th><th>Options</th><th>Candidates</th><th>Total size</th><th>Warnings</th><th>Blockers</th><th>Actions</th></tr></thead>
@@ -124,7 +138,7 @@ render_header('Saved Move Plans');
                     </td>
                 </tr>
             <?php endforeach; ?>
-            <?php if (!$plans): ?><tr><td colspan="11">No saved move plan snapshots yet.</td></tr><?php endif; ?>
+            <?php if (!$plans): ?><tr><td colspan="11">No saved move plan snapshots match this filter.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>
