@@ -24,11 +24,16 @@ $checked = 0;
 $remaining = 0;
 $complete = false;
 $repo = new MoveCandidateRepository(db());
+$preview = ['file_count' => 0, 'total_size' => 0];
 
 $categories = db()->query('SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name')->fetchAll();
 $drives = db()->query('SELECT id, friendly_name, free_bytes FROM drives WHERE is_active = 1 ORDER BY friendly_name')->fetchAll();
 
 try {
+    if ($categoryId > 0 && $targetDriveId > 0) {
+        $preview = $repo->summary(['category_id' => $categoryId, 'target_drive_id' => $targetDriveId]);
+    }
+
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($categoryId <= 0 || $targetDriveId <= 0) {
             throw new RuntimeException('Select one category and one target drive.');
@@ -57,10 +62,13 @@ try {
 
         $batch = $repo->unsavedBatch($planId, $categoryId, $targetDriveId, PLAN_BUILDER_BATCH_SIZE);
         $checked = count($batch);
-        $insertItem = db()->prepare('INSERT INTO move_plan_items (move_plan_id, category_id, file_entry_id, source_drive_id, target_drive_id, entry_type, size_bytes, relative_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $insertItem = db()->prepare('INSERT INTO move_plan_items (move_plan_id, category_id, file_entry_id, source_drive_id, target_drive_id, entry_type, size_bytes, relative_path, status) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM move_plan_items WHERE move_plan_id = ? AND file_entry_id = ?)');
         foreach ($batch as $item) {
-            $insertItem->execute([$planId, (int)$item['category_id'], (int)$item['id'], (int)$item['drive_id'], $targetDriveId, (string)$item['entry_type'], (int)$item['size_bytes'], (string)$item['relative_path'], 'planned']);
-            $added++;
+            $fileId = (int)$item['id'];
+            $insertItem->execute([$planId, (int)$item['category_id'], $fileId, (int)$item['drive_id'], $targetDriveId, (string)$item['entry_type'], (int)$item['size_bytes'], (string)$item['relative_path'], 'planned', $planId, $fileId]);
+            if ($insertItem->rowCount() > 0) {
+                $added++;
+            }
         }
 
         $totals = db()->prepare('SELECT COUNT(*) AS candidate_count, COALESCE(SUM(size_bytes), 0) AS total_size FROM move_plan_items WHERE move_plan_id = ?');
@@ -109,5 +117,6 @@ render_header('Plan Builder');
         <?php if ($planId > 0): ?><a class="button" href="move-plan-view.php?id=<?= e((string)$planId) ?>">View saved plan</a><?php endif; ?>
     </form>
 </div>
+<?php if ($categoryId > 0 && $targetDriveId > 0): ?><div class="card"><h2>Expected safe candidates</h2><div class="status-bar">Files: <?= e(number_format((int)$preview['file_count'])) ?> | Estimated size: <?= e(format_bytes((int)$preview['total_size'])) ?></div></div><?php endif; ?>
 <?php if ($plan): ?><div class="card"><h2>Snapshot status</h2><div class="status-bar">Plan #<?= e((string)$plan['id']) ?> | Status: <?= e((string)$plan['status']) ?> | Checked this batch: <?= e(number_format($checked)) ?> | Added this batch: <?= e(number_format($added)) ?> | Remaining: <?= e(number_format(max(0, $remaining))) ?> | Items saved: <?= e(number_format((int)$plan['candidate_count'])) ?> | Total size: <?= e(format_bytes((int)$plan['total_size_bytes'])) ?></div></div><?php endif; ?>
 <?php render_footer(); ?>
