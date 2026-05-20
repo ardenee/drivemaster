@@ -12,17 +12,31 @@ if ($saved > 0) {
     $message = 'Plan snapshot saved: ' . $saved;
 }
 
-function mp_json_count(?string $json): int
+function mp_json_array(?string $json): array
 {
     if (!$json) {
-        return 0;
+        return [];
     }
     try {
         $data = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
-        return is_array($data) ? count($data) : 0;
+        return is_array($data) ? $data : [];
     } catch (Throwable) {
-        return 0;
+        return [];
     }
+}
+
+function mp_json_count(?string $json): int
+{
+    return count(mp_json_array($json));
+}
+
+function mp_builder_url(array $plan): string
+{
+    $categories = mp_json_array($plan['selected_category_ids_json'] ?? null);
+    $drives = mp_json_array($plan['selected_drive_ids_json'] ?? null);
+    $categoryId = (int)($categories[0] ?? 0);
+    $driveId = (int)($drives[0] ?? 0);
+    return 'plan-builder.php?plan_id=' . (int)$plan['id'] . '&category_id=' . $categoryId . '&target_drive_id=' . $driveId;
 }
 
 function mp_json_flags(?string $json): string
@@ -39,7 +53,7 @@ function mp_json_flags(?string $json): string
         return '';
     }
     $flags = [];
-    foreach (['use_category_targets' => 'Category targets', 'allow_spanning' => 'Spanning', 'include_accepted' => 'Accepted conflicts', 'include_uncategorised' => 'Uncategorised'] as $key => $label) {
+    foreach (['safe_candidates' => 'Safe candidates', 'paged_builder' => 'Paged builder', 'use_category_targets' => 'Category targets', 'allow_spanning' => 'Spanning', 'include_accepted' => 'Accepted conflicts', 'include_uncategorised' => 'Uncategorised'] as $key => $label) {
         if (!empty($data[$key])) {
             $flags[] = $label;
         }
@@ -49,15 +63,7 @@ function mp_json_flags(?string $json): string
 
 function mp_json_warning_count(?string $json): int
 {
-    if (!$json) {
-        return 0;
-    }
-    try {
-        $data = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
-        return is_array($data) ? count(array_filter($data)) : 0;
-    } catch (Throwable) {
-        return 0;
-    }
+    return count(array_filter(mp_json_array($json)));
 }
 
 try {
@@ -90,8 +96,8 @@ render_header('Saved Move Plans');
 
 <div class="card">
     <h2>Saved move plans</h2>
-    <p class="muted">Read-only move plan snapshots. These do not queue jobs and do not move files.</p>
-    <div class="button-row"><a class="button" href="move-planner.php">Move Planner</a></div>
+    <p class="muted">Read-only move plan snapshots. Building plans can be resumed from here.</p>
+    <div class="button-row"><a class="button" href="move-planner.php">Move Planner</a> <a class="button" href="plan-builder.php">Plan Builder</a></div>
     <div class="table-scroll">
         <table class="auto-table compact-table">
             <thead><tr><th>ID</th><th>Status</th><th>Created</th><th>Categories</th><th>Target drives</th><th>Options</th><th>Candidates</th><th>Total size</th><th>Warnings</th><th>Blockers</th><th>Actions</th></tr></thead>
@@ -110,6 +116,7 @@ render_header('Saved Move Plans');
                     <td><?= e(number_format(mp_json_warning_count($plan['blocker_summary_json'] ?? null))) ?></td>
                     <td class="actions">
                         <a class="button" href="move-plan-view.php?id=<?= e((string)$plan['id']) ?>">View</a>
+                        <?php if ($plan['status'] === 'building'): ?><a class="button" href="<?= e(mp_builder_url($plan)) ?>">Continue</a><?php endif; ?>
                         <?php if ($plan['status'] !== 'archived'): ?>
                             <form method="post" style="display:inline"><input type="hidden" name="action" value="archive_plan"><input type="hidden" name="id" value="<?= e((string)$plan['id']) ?>"><button type="submit">Archive</button></form>
                         <?php endif; ?>
