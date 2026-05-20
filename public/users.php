@@ -109,48 +109,77 @@ try {
 $users = db()->query('SELECT id, username, display_name, role, is_active, last_login_at, created_at FROM users ORDER BY username')->fetchAll();
 render_header('Users');
 ?>
-<?php if ($message): ?><div class="card"><strong><?= e($message) ?></strong></div><?php endif; ?>
-<?php if ($error): ?><div class="card"><strong>Error:</strong> <?= e($error) ?></div><?php endif; ?>
-<?php if (!$users): ?><div class="card"><strong>No users exist yet.</strong> Create the first admin account below. Until a user exists, DriveMaster remains accessible to avoid lockout.</div><?php endif; ?>
-<div class="card">
-    <h2>Create user</h2>
-    <form method="post">
-        <input type="hidden" name="action" value="create">
-        <div class="form-grid">
-            <label>Username <input type="text" name="username" required></label>
-            <label>Display name <input type="text" name="display_name"></label>
-            <label>Role <select name="role"><option value="user">User</option><option value="admin" <?= !$users ? 'selected' : '' ?>>Admin</option></select></label>
-            <label>Access value <input type="password" name="access_value" required></label>
-            <label>Confirm access value <input type="password" name="access_confirm" required></label>
+<div class="page-shell">
+    <div class="page-heading">
+        <div>
+            <h2>User management</h2>
+            <p class="muted">Create users, assign roles, and disable access without deleting history.</p>
         </div>
-        <button type="submit">Create user</button>
-    </form>
-</div>
-<div class="card">
-    <h2>Users</h2>
-    <p class="muted">The default admin account cannot be demoted, disabled, or deleted.</p>
-    <div class="table-scroll"><table class="auto-table compact-table"><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Active</th><th>Last login</th><th>Created</th><th>Actions</th></tr></thead><tbody>
-    <?php foreach ($users as $user): ?>
-        <?php $isDefaultAdmin = users_is_default_admin($user); ?>
-        <tr>
-            <td><?= e($user['username']) ?><?= $isDefaultAdmin ? ' <strong>(protected)</strong>' : '' ?></td>
-            <td><?= e($user['display_name']) ?></td>
-            <td><?= e($user['role']) ?></td>
-            <td><?= (int)$user['is_active'] === 1 ? 'Yes' : 'No' ?></td>
-            <td><?= e($user['last_login_at'] ?? '') ?></td>
-            <td><?= e($user['created_at']) ?></td>
-            <td class="actions">
-                <?php if (!$isDefaultAdmin): ?>
-                    <form method="post" style="display:inline"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><button type="submit"><?= (int)$user['is_active'] === 1 ? 'Disable' : 'Enable' ?></button></form>
-                    <form method="post" style="display:inline"><input type="hidden" name="action" value="role"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><input type="hidden" name="role" value="<?= $user['role'] === 'admin' ? 'user' : 'admin' ?>"><button type="submit">Make <?= $user['role'] === 'admin' ? 'User' : 'Admin' ?></button></form>
-                    <form method="post" style="display:inline" onsubmit="return confirm('Delete this user?');"><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><button class="danger" type="submit">Delete</button></form>
-                <?php else: ?>
-                    Protected
-                <?php endif; ?>
-            </td>
-        </tr>
-    <?php endforeach; ?>
-    <?php if (!$users): ?><tr><td colspan="7">No users found.</td></tr><?php endif; ?>
-    </tbody></table></div>
+        <div class="status-bar">Users: <?= e(number_format(count($users))) ?> | Active admins: <?= e(number_format(users_admin_count())) ?></div>
+    </div>
+
+    <?php if ($message): ?><div class="card"><strong><?= e($message) ?></strong></div><?php endif; ?>
+    <?php if ($error): ?><div class="card danger-zone"><strong>Error:</strong> <?= e($error) ?></div><?php endif; ?>
+    <?php if (!$users): ?><div class="card"><strong>No users exist yet.</strong> Create the first admin account below. Until a user exists, DriveMaster remains accessible to avoid lockout.</div><?php endif; ?>
+
+    <div class="admin-grid">
+        <div class="card admin-card">
+            <h2>Create user</h2>
+            <p class="muted">New accounts are active immediately. Use at least 10 characters for the access value.</p>
+            <form method="post" class="admin-form">
+                <input type="hidden" name="action" value="create">
+                <label>Username
+                    <input type="text" name="username" required autocomplete="username">
+                </label>
+                <label>Display name
+                    <input type="text" name="display_name">
+                </label>
+                <label>Role
+                    <select name="role"><option value="user">User</option><option value="admin" <?= !$users ? 'selected' : '' ?>>Admin</option></select>
+                </label>
+                <label>Access value
+                    <input type="password" name="access_value" required autocomplete="new-password">
+                </label>
+                <label>Confirm access value
+                    <input type="password" name="access_confirm" required autocomplete="new-password">
+                </label>
+                <button type="submit">Create user</button>
+            </form>
+        </div>
+
+        <div class="card admin-card">
+            <h2>Existing users</h2>
+            <p class="muted">The default admin account is protected and cannot be demoted, disabled, or deleted.</p>
+            <div class="table-scroll">
+                <table class="auto-table compact-table">
+                    <thead><tr><th>User</th><th>Role</th><th>Status</th><th>Last login</th><th>Created</th><th>Actions</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($users as $user): ?>
+                        <?php $isDefaultAdmin = users_is_default_admin($user); ?>
+                        <tr>
+                            <td><strong><?= e($user['username']) ?></strong><?= $isDefaultAdmin ? ' <span class="protected-badge">protected</span>' : '' ?><br><span class="muted"><?= e($user['display_name']) ?></span></td>
+                            <td><span class="user-role-badge <?= e($user['role']) ?>"><?= e(ucfirst((string)$user['role'])) ?></span></td>
+                            <td><span class="user-status-badge <?= (int)$user['is_active'] === 1 ? 'active' : 'disabled' ?>"><?= (int)$user['is_active'] === 1 ? 'Active' : 'Disabled' ?></span></td>
+                            <td><?= e($user['last_login_at'] ?? 'Never') ?></td>
+                            <td><?= e($user['created_at']) ?></td>
+                            <td>
+                                <?php if (!$isDefaultAdmin): ?>
+                                    <div class="table-actions">
+                                        <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><button type="submit"><?= (int)$user['is_active'] === 1 ? 'Disable' : 'Enable' ?></button></form>
+                                        <form method="post"><input type="hidden" name="action" value="role"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><input type="hidden" name="role" value="<?= $user['role'] === 'admin' ? 'user' : 'admin' ?>"><button type="submit">Make <?= $user['role'] === 'admin' ? 'User' : 'Admin' ?></button></form>
+                                        <form method="post" onsubmit="return confirm('Delete this user?');"><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><button class="danger" type="submit">Delete</button></form>
+                                    </div>
+                                <?php else: ?>
+                                    <span class="muted">Protected</span>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    <?php if (!$users): ?><tr><td colspan="6">No users found.</td></tr><?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
 </div>
 <?php render_footer(); ?>
