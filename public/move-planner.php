@@ -59,7 +59,7 @@ render_header('Move Planner');
                 </select>
             </label>
         </div>
-        <div class="button-row"><button type="submit">Preview direct manual files</button> <a class="button" href="move-candidates.php<?= $categoryId > 0 ? '?category_id=' . e((string)$categoryId) . ($driveId > 0 ? '&target_drive_id=' . e((string)$driveId) : '') : '' ?>">Safe Move Candidates</a> <a class="button" href="planner-readiness.php">Readiness</a> <a class="button" href="move-plans.php">Saved Plans</a></div>
+        <div class="button-row"><button type="submit">Preview direct manual files</button> <a class="button" href="move-candidates.php<?= $categoryId > 0 ? '?category_id=' . e((string)$categoryId) . ($driveId > 0 ? '&target_drive_id=' . e((string)$driveId) : '') : '' ?>">Safe Move Candidates</a> <?php if ($categoryId > 0 && $driveId > 0): ?><a class="button" href="plan-builder.php?category_id=<?= e((string)$categoryId) ?>&target_drive_id=<?= e((string)$driveId) ?>">Build Snapshot</a><?php endif; ?> <a class="button" href="planner-readiness.php">Readiness</a> <a class="button" href="move-plans.php">Saved Plans</a></div>
     </form>
 </div>
 
@@ -71,12 +71,13 @@ render_header('Move Planner');
     <?php else: ?>
         <div class="status-bar">Direct manual files considered: <?= e(number_format((int)($summary['file_count'] ?? 0))) ?> | Estimated file size: <?= e(format_bytes((int)($summary['total_size'] ?? 0))) ?></div>
         <p class="muted">This fast preview only counts directly assigned files. Folder assignments, rule matches, conflicts, target-drive exclusions, and exact safety checks are handled by Safe Move Candidates.</p>
+        <?php if ($driveId > 0): ?><div class="button-row"><a class="button" href="plan-builder.php?category_id=<?= e((string)$categoryId) ?>&target_drive_id=<?= e((string)$driveId) ?>">Build saved snapshot in batches</a></div><?php endif; ?>
     <?php endif; ?>
 </div>
 <?php endif; ?>
 
 <div class="card">
     <h2>Planner rebuild status</h2>
-    <p class="muted">The previous planner did heavy all-category/all-drive inventory expansion on load, which can 504 on large databases. This page is now safe to load; exact saved plan generation should be rebuilt next using paged candidate snapshots rather than one large query.</p>
+    <p class="muted">Saved plan generation now uses the paged Plan Builder, rather than one large all-inventory request.</p>
 </div>
 <?php render_footer(); ?>
