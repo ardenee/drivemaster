@@ -1,77 +1,35 @@
 document.addEventListener('DOMContentLoaded', function () {
-    const sidebar = document.querySelector('.explorer-sidebar');
-    const menu = document.getElementById('context-menu');
-    const driveMenu = document.getElementById('drive-context-menu');
-
-    function loadIgnoredFolderFilter() {
-        if (window.__driveMasterIgnoredFolderFilterLoaded) {
-            return;
+    function showToast(message) {
+        let toast = document.getElementById('tree-loading-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'tree-loading-toast';
+            toast.className = 'tree-loading-toast';
+            document.body.appendChild(toast);
         }
-        window.__driveMasterIgnoredFolderFilterLoaded = true;
-        const script = document.createElement('script');
-        script.src = 'assets/ignored-folders-client.js?ts=' + Date.now();
-        script.defer = true;
-        document.head.appendChild(script);
+        toast.textContent = message;
+        toast.classList.add('visible');
     }
 
-    function loadAjaxExplorerController() {
-        if (window.__driveMasterAjaxExplorerLoaded) {
-            return;
-        }
-        window.__driveMasterAjaxExplorerLoaded = true;
-        const script = document.createElement('script');
-        script.src = 'assets/files-ajax-explorer.js?ts=' + Date.now();
-        script.defer = true;
-        document.head.appendChild(script);
-    }
-
-    function loadContextActionsController() {
-        if (window.__driveMasterFilesContextActionsLoaded) {
-            return;
-        }
-        window.__driveMasterFilesContextActionsLoaded = true;
-        const script = document.createElement('script');
-        script.src = 'assets/files-context-actions.js?ts=' + Date.now();
-        script.defer = true;
-        document.head.appendChild(script);
-    }
-
-    function loadCompactStatusController() {
-        if (window.__driveMasterCompactExplorerStatusLoaded) {
-            return;
-        }
-        window.__driveMasterCompactExplorerStatusLoaded = true;
-        const script = document.createElement('script');
-        script.src = 'assets/files-status-compact.js?ts=' + Date.now();
-        script.defer = true;
-        document.head.appendChild(script);
-    }
-
-    function removeOldTopRightToast() {
+    function hideToast() {
         const toast = document.getElementById('tree-loading-toast');
         if (toast) {
-            toast.remove();
+            toast.classList.remove('visible');
         }
     }
 
-    function ensureOverlay() {
-        removeOldTopRightToast();
+    function showOverlay(message) {
         let overlay = document.getElementById('ajax-explorer-overlay');
         if (!overlay) {
             overlay = document.createElement('div');
             overlay.id = 'ajax-explorer-overlay';
             overlay.className = 'ajax-explorer-overlay';
-            overlay.innerHTML = '<div class="ajax-explorer-overlay-box">Loading folder data...</div>';
+            overlay.innerHTML = '<div class="ajax-explorer-overlay-box"></div>';
             document.body.appendChild(overlay);
         }
-        return overlay;
-    }
-
-    function showOverlay(text) {
-        const overlay = ensureOverlay();
         const box = overlay.querySelector('.ajax-explorer-overlay-box');
         if (box) {
-            box.textContent = text || 'Loading folder data...';
+            box.textContent = message || 'Loading...';
         }
         overlay.classList.add('visible');
     }
@@ -83,63 +41,22 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function getUrlParam(row, key) {
-        try {
-            const url = new URL(row.dataset.url || '', window.location.href);
-            return url.searchParams.get(key) || '';
-        } catch (e) {
-            return '';
+    function removeOldTopRightToast() {
+        const oldToast = document.getElementById('tree-loading-toast');
+        if (oldToast) {
+            oldToast.remove();
         }
     }
 
-    function hexToRgb(hex) {
-        const match = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '');
-        if (!match) {
-            return null;
-        }
-        return { r: parseInt(match[1], 16), g: parseInt(match[2], 16), b: parseInt(match[3], 16) };
-    }
-
-    function ensureDriveMenuActions() {
-        if (!driveMenu || driveMenu.dataset.expandActionsAdded === '1') {
-            return;
-        }
-        driveMenu.dataset.expandActionsAdded = '1';
-        const expandButton = document.createElement('button');
-        expandButton.type = 'button';
-        expandButton.dataset.driveAction = 'expand_drive';
-        expandButton.textContent = 'Expand Drive';
-        const collapseButton = document.createElement('button');
-        collapseButton.type = 'button';
-        collapseButton.dataset.driveAction = 'collapse_drive';
-        collapseButton.textContent = 'Collapse Drive';
-        const separator = document.createElement('hr');
-        driveMenu.insertBefore(expandButton, driveMenu.firstChild);
-        driveMenu.insertBefore(collapseButton, expandButton.nextSibling);
-        driveMenu.insertBefore(separator, collapseButton.nextSibling);
-    }
-
-    function ensureFolderMenuActions() {
-        if (!menu || menu.dataset.treeExpandActionsAdded === '1') {
-            return;
-        }
-        menu.dataset.treeExpandActionsAdded = '1';
-        const expandButton = document.createElement('button');
-        expandButton.type = 'button';
-        expandButton.dataset.contextAction = 'expand_folder';
-        expandButton.textContent = 'Expand Folder';
-        const collapseButton = document.createElement('button');
-        collapseButton.type = 'button';
-        collapseButton.dataset.contextAction = 'collapse_folder';
-        collapseButton.textContent = 'Collapse Folder';
-        const separator = document.createElement('hr');
-        menu.insertBefore(expandButton, menu.firstChild);
-        menu.insertBefore(collapseButton, expandButton.nextSibling);
-        menu.insertBefore(separator, collapseButton.nextSibling);
+    function currentSelectedTreeRow() {
+        return document.querySelector('.tree-folder.selected-row') || document.querySelector('.tree-drive.selected-row');
     }
 
     function treeLevel(row) {
-        return Number(row.dataset.level || (row.classList.contains('tree-drive') ? -1 : 0));
+        if (!row || row.classList.contains('tree-drive')) {
+            return -1;
+        }
+        return Number(row.dataset.level || 0);
     }
 
     function setToggle(row, value) {
@@ -160,224 +77,256 @@ document.addEventListener('DOMContentLoaded', function () {
             next = next.nextElementSibling;
             remove.remove();
         }
-        setToggle(row, '▸');
         row.dataset.loaded = '0';
+        setToggle(row, '▸');
     }
 
-    function removeDriveDescendants(driveRow) {
-        if (!driveRow) {
+    function removeDriveDescendants(row) {
+        if (!row) {
             return;
         }
-        let next = driveRow.nextElementSibling;
+        let next = row.nextElementSibling;
         while (next && next.classList.contains('tree-folder')) {
             const remove = next;
             next = next.nextElementSibling;
             remove.remove();
         }
-        setToggle(driveRow, '▸');
-        driveRow.dataset.loaded = '0';
+        row.dataset.loaded = '0';
+        setToggle(row, '▸');
     }
 
-    function insertChildrenAfter(row, html) {
-        const template = document.createElement('template');
-        template.innerHTML = html || '';
-        const nodes = Array.from(template.content.children);
-        let anchor = row;
-        nodes.forEach(function (node) {
-            anchor.insertAdjacentElement('afterend', node);
-            anchor = node;
-        });
-        loadIgnoredFolderFilter();
-        applyTreeCategoryColours(nodes);
-        return nodes;
-    }
-
-    function loadChildren(row, message) {
-        if (!row) {
-            return Promise.resolve([]);
+    function loadIgnoredFolderFilter() {
+        const controls = document.querySelector('[data-ignore-filter-controls]');
+        if (!controls) {
+            return;
         }
-        const driveId = row.classList.contains('tree-drive') ? row.dataset.driveId : (row.dataset.driveId || getUrlParam(row, 'drive_id'));
-        const parentPath = row.classList.contains('tree-drive') ? '' : (row.dataset.path || getUrlParam(row, 'path'));
-        const level = row.classList.contains('tree-drive') ? -1 : treeLevel(row);
-        if (!driveId) {
-            return Promise.resolve([]);
+        const form = controls.closest('form');
+        const driveSelect = controls.querySelector('[data-drive-select]');
+        const pathInput = controls.querySelector('[data-path-input]');
+        const showIgnoredInput = controls.querySelector('[data-show-ignored-input]');
+        const showIgnoredToggle = controls.querySelector('[data-show-ignored-toggle]');
+        if (!form || !driveSelect || !pathInput || !showIgnoredInput || !showIgnoredToggle) {
+            return;
         }
-        setToggle(row, '…');
-        showOverlay(message || 'Loading folder data...');
-        return fetch('files-tree-children.php?drive_id=' + encodeURIComponent(driveId) + '&parent_path=' + encodeURIComponent(parentPath || '') + '&level=' + encodeURIComponent(level), { cache: 'no-store' })
-            .then(function (response) { return response.json(); })
-            .then(function (data) {
-                if (!data.ok) {
-                    return [];
-                }
-                if (row.classList.contains('tree-drive')) {
-                    removeDriveDescendants(row);
-                } else {
-                    removeDescendants(row);
-                }
-                const nodes = insertChildrenAfter(row, data.html || '');
-                row.dataset.loaded = nodes.length ? '1' : '0';
-                setToggle(row, nodes.length ? '▾' : '·');
-                return nodes;
-            })
-            .catch(function () {
-                row.dataset.loaded = '0';
-                setToggle(row, '▸');
-                return [];
-            })
-            .finally(function () {
-                hideOverlay();
+        document.querySelectorAll('.tree-folder[data-path]').forEach(function (row) {
+            row.addEventListener('click', function () {
+                pathInput.value = row.dataset.path || '';
             });
-    }
-
-    function expandAllFolders(row) {
-        if (!row) {
-            return Promise.resolve();
-        }
-        showOverlay('Expanding folder tree...');
-        return loadChildren(row, 'Expanding folder tree...').then(function (children) {
-            return children.reduce(function (promise, child) {
-                return promise.then(function () { return expandAllFolders(child); });
-            }, Promise.resolve());
-        }).finally(function () {
-            hideOverlay();
+            row.addEventListener('dblclick', function () {
+                pathInput.value = row.dataset.path || '';
+                driveSelect.value = row.dataset.driveId || driveSelect.value;
+                form.submit();
+            });
+        });
+        document.querySelectorAll('.tree-drive[data-drive-id]').forEach(function (row) {
+            row.addEventListener('click', function () {
+                driveSelect.value = row.dataset.driveId || driveSelect.value;
+                pathInput.value = '';
+            });
+        });
+        showIgnoredToggle.addEventListener('change', function () {
+            showIgnoredInput.value = showIgnoredToggle.checked ? '1' : '0';
+            form.submit();
         });
     }
 
-    function toggleFolder(row) {
-        if (!row) {
+    function loadAjaxExplorerController() {
+        const explorer = document.querySelector('.ajax-explorer');
+        if (!explorer) {
             return;
         }
-        if (row.dataset.loaded === '1') {
-            if (row.classList.contains('tree-drive')) {
-                removeDriveDescendants(row);
-            } else {
-                removeDescendants(row);
-            }
-        } else {
-            loadChildren(row, row.classList.contains('tree-drive') ? 'Loading drive folders...' : 'Loading folder data...');
-        }
-    }
-
-    function applyTreeCategoryColours(rows) {
-        const candidates = Array.from(rows && rows.length ? rows : document.querySelectorAll('.tree-folder')).filter(function (row) {
-            return row.dataset.id && row.dataset.categoryColourApplied !== '1';
-        });
-        if (!candidates.length) {
+        const tree = explorer.querySelector('.explorer-sidebar');
+        const tableBody = explorer.querySelector('.explorer-table tbody');
+        if (!tree || !tableBody) {
             return;
         }
-        const ids = candidates.map(function (row) { return row.dataset.id; }).join(',');
-        fetch('files-entry-category-colors.php?ids=' + encodeURIComponent(ids), { cache: 'no-store' })
-            .then(function (response) { return response.json(); })
-            .then(function (data) {
-                if (!data.ok || !data.colors) {
-                    return;
-                }
-                candidates.forEach(function (row) {
-                    const list = data.colors[row.dataset.id] || [];
-                    if (!list.length) {
-                        row.dataset.categoryColourApplied = '1';
-                        return;
-                    }
-                    const rgb = hexToRgb(list[0].color);
-                    if (!rgb) {
-                        return;
-                    }
-                    row.style.backgroundColor = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.18)';
-                    row.style.borderLeft = '4px solid rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.85)';
-                    row.title = 'Category: ' + list.map(function (item) { return item.name; }).join(', ');
-                    row.dataset.categoryColourApplied = '1';
-                });
-            })
-            .catch(function () {});
-    }
-
-    function wireTreeActions() {
-        if (!sidebar || sidebar.dataset.treeContextLite === '1') {
-            return;
-        }
-        sidebar.dataset.treeContextLite = '1';
-        let contextDriveRow = null;
-
-        sidebar.addEventListener('click', function (event) {
-            const row = event.target.closest('.tree-drive,.tree-folder');
+        tree.addEventListener('click', function (event) {
+            const row = event.target.closest('.tree-folder, .tree-drive');
             if (!row) {
                 return;
             }
             if (event.target.closest('.tree-toggle')) {
                 event.preventDefault();
-                event.stopPropagation();
-                event.stopImmediatePropagation();
-                toggleFolder(row);
+                if (row.dataset.loaded === '1') {
+                    if (row.classList.contains('tree-drive')) {
+                        removeDriveDescendants(row);
+                    } else {
+                        removeDescendants(row);
+                    }
+                }
+            }
+        });
+    }
+
+    function loadContextActionsController() {
+        const contextMenu = document.getElementById('context-menu');
+        const contextForm = document.getElementById('context-form');
+        const contextDialog = document.getElementById('context-dialog');
+        if (!contextMenu || !contextForm || !contextDialog) {
+            return;
+        }
+        let currentRows = [];
+        let currentDriveId = null;
+        const actionInput = document.getElementById('context-action-input');
+        const selectedIdsInput = document.getElementById('context-selected-ids');
+        const driveIdInput = document.getElementById('context-drive-id');
+        const categoryArea = document.getElementById('context-category-area');
+        const moveArea = document.getElementById('context-move-area');
+        const renameArea = document.getElementById('context-rename-area');
+        const dialogTitle = document.getElementById('context-dialog-title');
+        const dialogNote = document.getElementById('context-dialog-note');
+        const cancelButton = document.getElementById('context-cancel-button');
+
+        function hideContextMenu() {
+            contextMenu.classList.remove('visible');
+        }
+
+        function selectedRows() {
+            const rows = Array.from(document.querySelectorAll('.selectable-row.selected-row[data-id]'));
+            if (rows.length > 0) {
+                return rows;
+            }
+            return currentRows;
+        }
+
+        function showDialog(action) {
+            currentRows = selectedRows();
+            if (!currentRows.length) {
                 return;
             }
-        }, true);
+            const ids = currentRows.map(function (row) { return row.dataset.id; }).filter(Boolean);
+            if (!ids.length) {
+                return;
+            }
+            currentDriveId = currentRows[0].dataset.driveId || currentDriveId;
+            actionInput.value = action;
+            selectedIdsInput.value = ids.join(',');
+            driveIdInput.value = currentDriveId || '';
+            categoryArea.style.display = action === 'add_category' || action === 'remove_category' ? '' : 'none';
+            moveArea.style.display = action === 'move' ? '' : 'none';
+            renameArea.style.display = action === 'rename' && ids.length === 1 ? '' : 'none';
+            const newName = document.getElementById('context-new-name');
+            if (newName && action === 'rename' && ids.length === 1) {
+                newName.value = currentRows[0].dataset.entryName || '';
+            }
+            const labels = {
+                add_category: 'Add to category',
+                remove_category: 'Remove from category',
+                rename: 'Rename',
+                move: 'Move',
+                delete: 'Delete'
+            };
+            dialogTitle.textContent = labels[action] || 'Action';
+            dialogNote.textContent = ids.length + ' item(s) selected.';
+            contextDialog.classList.remove('hidden');
+        }
 
-        sidebar.addEventListener('dblclick', function (event) {
-            const row = event.target.closest('.tree-drive,.tree-folder');
+        document.addEventListener('contextmenu', function (event) {
+            const row = event.target.closest('.selectable-row[data-id]');
             if (!row) {
                 return;
             }
             event.preventDefault();
-            event.stopPropagation();
-            event.stopImmediatePropagation();
-            toggleFolder(row);
-        }, true);
-
-        sidebar.addEventListener('contextmenu', function (event) {
-            const drive = event.target.closest('.tree-drive');
-            if (drive) {
-                contextDriveRow = drive;
+            if (!row.classList.contains('selected-row')) {
+                document.querySelectorAll('.selectable-row.selected-row').forEach(function (selected) { selected.classList.remove('selected-row'); });
+                row.classList.add('selected-row');
             }
-        }, true);
+            currentRows = selectedRows();
+            currentDriveId = row.dataset.driveId || null;
+            contextMenu.style.left = event.pageX + 'px';
+            contextMenu.style.top = event.pageY + 'px';
+            contextMenu.classList.add('visible');
+        });
 
-        if (menu) {
-            menu.addEventListener('click', function (event) {
-                const button = event.target.closest('[data-context-action]');
-                if (!button || !menu.dataset.treeFolderMenu) {
-                    return;
-                }
-                const folder = window.__driveMasterContextFolderRow || document.querySelector('.tree-folder.selected-row');
-                if (button.dataset.contextAction === 'expand_folder') {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    event.stopImmediatePropagation();
-                    menu.classList.remove('visible');
-                    expandAllFolders(folder);
-                    return;
-                }
-                if (button.dataset.contextAction === 'collapse_folder') {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    event.stopImmediatePropagation();
-                    menu.classList.remove('visible');
-                    removeDescendants(folder);
-                }
-            }, true);
-        }
+        contextMenu.addEventListener('click', function (event) {
+            const button = event.target.closest('[data-context-action]');
+            if (!button) {
+                return;
+            }
+            event.preventDefault();
+            hideContextMenu();
+            showDialog(button.dataset.contextAction);
+        });
 
-        if (driveMenu) {
-            driveMenu.addEventListener('click', function (event) {
-                const button = event.target.closest('[data-drive-action]');
-                if (!button) {
+        document.addEventListener('click', function (event) {
+            if (!event.target.closest('#context-menu')) {
+                hideContextMenu();
+            }
+        });
+
+        if (cancelButton) {
+            cancelButton.addEventListener('click', function () {
+                contextDialog.classList.add('hidden');
+            });
+        }
+    }
+
+    function loadCompactStatusController() {
+        document.querySelectorAll('.selectable-table').forEach(function (table) {
+            const targetId = table.dataset.statusTarget;
+            if (!targetId) {
+                return;
+            }
+            const status = document.getElementById(targetId);
+            if (!status) {
+                return;
+            }
+            table.addEventListener('click', function () {
+                let selectedSize = 0;
+                const selected = table.querySelectorAll('.selectable-row.selected-row');
+                selected.forEach(function (row) {
+                    selectedSize += Number(row.dataset.size || 0);
+                });
+                status.textContent = 'Selected: ' + selected.length + ' | Selected size: ' + selectedSize + ' bytes';
+            });
+        });
+    }
+
+    function ensureDriveMenuActions() {
+        const driveMenu = document.getElementById('drive-context-menu');
+        if (!driveMenu) {
+            return;
+        }
+        let contextDriveRow = null;
+        document.addEventListener('contextmenu', function (event) {
+            const driveRow = event.target.closest('.tree-drive');
+            if (!driveRow) {
+                return;
+            }
+            contextDriveRow = driveRow;
+            driveMenu.style.left = event.pageX + 'px';
+            driveMenu.style.top = event.pageY + 'px';
+            driveMenu.classList.add('visible');
+        });
+        document.addEventListener('click', function (event) {
+            if (!event.target.closest('#drive-context-menu')) {
+                driveMenu.classList.remove('visible');
+            }
+        });
+        driveMenu.addEventListener('click', function (event) {
+            const button = event.target.closest('[data-drive-action]');
+            if (!button) {
+                return;
+            }
+            if (button.dataset.driveAction === 'remove_drive') {
+                event.preventDefault();
+                const form = document.getElementById('context-form');
+                if (!form || !contextDriveRow) {
                     return;
                 }
-                if (button.dataset.driveAction === 'expand_drive') {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    event.stopImmediatePropagation();
-                    driveMenu.classList.remove('visible');
-                    expandAllFolders(contextDriveRow || document.querySelector('.tree-drive.selected-row'));
-                }
-                if (button.dataset.driveAction === 'collapse_drive') {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    event.stopImmediatePropagation();
-                    driveMenu.classList.remove('visible');
-                    removeDriveDescendants(contextDriveRow || document.querySelector('.tree-drive.selected-row'));
-                }
-            }, true);
-        }
+                document.getElementById('context-action-input').value = 'remove_drive';
+                document.getElementById('context-drive-id').value = contextDriveRow.dataset.driveId || '';
+                form.submit();
+            }
+        });
+    }
+
+    function ensureFolderMenuActions() {
+        return;
+    }
+
+    function wireTreeActions() {
+        return;
     }
 
     function wireNavigationNotice() {
@@ -387,7 +336,11 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    if (window.driveMasterPageMode === 'category-workflow') {
+    function applyTreeCategoryColours() {
+        return;
+    }
+
+    if (window.driveMasterPageMode === 'category-status') {
         loadContextActionsController();
         return;
     }

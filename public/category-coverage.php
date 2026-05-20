@@ -70,10 +70,10 @@ render_header('Category Coverage');
         <table class="auto-table compact-table">
             <thead><tr><th>Metric</th><th>Items</th><th>Files</th><th>Folders</th><th>File size</th><th>Action</th></tr></thead>
             <tbody>
-                <tr><td>Total indexed inventory</td><td><?= e(number_format((int)($inventory['total_items'] ?? 0))) ?></td><td><?= e(number_format((int)($inventory['file_count'] ?? 0))) ?></td><td><?= e(number_format((int)($inventory['folder_count'] ?? 0))) ?></td><td><?= e(format_bytes((int)($inventory['total_size'] ?? 0))) ?></td><td><a class="button" href="category-workflow.php?status=any&entry_type=any">View</a></td></tr>
-                <tr><td>Uncategorised files</td><td colspan="4" class="muted">Calculated on demand</td><td><a class="button" href="category-workflow.php?status=uncategorised&entry_type=file">Review</a></td></tr>
-                <tr><td>Uncategorised folders</td><td colspan="4" class="muted">Calculated on demand</td><td><a class="button" href="category-workflow.php?status=uncategorised&entry_type=folder">Review</a></td></tr>
-                <tr><td>Category conflicts</td><td colspan="4" class="muted">Calculated on demand</td><td><a class="button" href="category-workflow.php?status=conflicted&entry_type=any">Review</a></td></tr>
+                <tr><td>Total indexed inventory</td><td><?= e(number_format((int)($inventory['total_items'] ?? 0))) ?></td><td><?= e(number_format((int)($inventory['file_count'] ?? 0))) ?></td><td><?= e(number_format((int)($inventory['folder_count'] ?? 0))) ?></td><td><?= e(format_bytes((int)($inventory['total_size'] ?? 0))) ?></td><td><a class="button" href="category-status.php?mode=assigned">View categorised</a></td></tr>
+                <tr><td>Uncategorised files</td><td colspan="4" class="muted">Calculated on demand</td><td><a class="button" href="category-status.php?mode=unassigned">Review</a></td></tr>
+                <tr><td>Uncategorised folders</td><td colspan="4" class="muted">Calculated on demand</td><td><a class="button" href="category-status.php?mode=unassigned">Review</a></td></tr>
+                <tr><td>Category conflicts</td><td colspan="4" class="muted">Calculated on demand</td><td><a class="button" href="category-conflicts.php">Review</a></td></tr>
             </tbody>
         </table>
     </div>
