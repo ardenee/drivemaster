@@ -5,6 +5,8 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 require __DIR__ . '/_layout.php';
 
+use DriveMaster\Repository\MoveCandidateRepository;
+
 const PLAN_BUILDER_BATCH_SIZE = 250;
 
 function pb_json(array $data): string
@@ -21,6 +23,7 @@ $added = 0;
 $checked = 0;
 $remaining = 0;
 $complete = false;
+$repo = new MoveCandidateRepository(db());
 
 $categories = db()->query('SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name')->fetchAll();
 $drives = db()->query('SELECT id, friendly_name, free_bytes FROM drives WHERE is_active = 1 ORDER BY friendly_name')->fetchAll();
@@ -38,7 +41,7 @@ try {
         }
 
         if ($planId > 0) {
-            $planCheck = db()->prepare('SELECT selected_category_ids_json, selected_drive_ids_json, status FROM move_plans WHERE id = ?');
+            $planCheck = db()->prepare('SELECT status FROM move_plans WHERE id = ?');
             $planCheck->execute([$planId]);
             $existingPlan = $planCheck->fetch();
             if (!$existingPlan) {
@@ -51,23 +54,15 @@ try {
 
         if ($planId <= 0) {
             $insertPlan = db()->prepare('INSERT INTO move_plans (status, selected_category_ids_json, selected_drive_ids_json, options_json, warning_summary_json, blocker_summary_json) VALUES (?, ?, ?, ?, ?, ?)');
-            $insertPlan->execute(['building', pb_json([$categoryId]), pb_json([$targetDriveId]), pb_json(['paged_builder' => true, 'batch_size' => PLAN_BUILDER_BATCH_SIZE]), pb_json([]), pb_json([])]);
+            $insertPlan->execute(['building', pb_json([$categoryId]), pb_json([$targetDriveId]), pb_json(['paged_builder' => true, 'safe_candidates' => true, 'batch_size' => PLAN_BUILDER_BATCH_SIZE]), pb_json([]), pb_json([])]);
             $planId = (int)db()->lastInsertId();
         }
 
-        $sql = "SELECT f.id, f.drive_id, f.size_bytes, f.relative_path FROM category_manual_assignments cma JOIN file_entries f ON f.id = cma.file_entry_id AND f.is_missing = 0 AND f.entry_type = 'file' LEFT JOIN move_plan_items mpi ON mpi.move_plan_id = ? AND mpi.file_entry_id = f.id WHERE cma.assignment_type = 'file' AND cma.category_id = ? AND f.drive_id <> ? AND mpi.id IS NULL ORDER BY f.id ASC LIMIT ?";
-        $stmt = db()->prepare($sql);
-        $stmt->bindValue(1, $planId, PDO::PARAM_INT);
-        $stmt->bindValue(2, $categoryId, PDO::PARAM_INT);
-        $stmt->bindValue(3, $targetDriveId, PDO::PARAM_INT);
-        $stmt->bindValue(4, PLAN_BUILDER_BATCH_SIZE, PDO::PARAM_INT);
-        $stmt->execute();
-        $batch = $stmt->fetchAll();
+        $batch = $repo->unsavedBatch($planId, $categoryId, $targetDriveId, PLAN_BUILDER_BATCH_SIZE);
         $checked = count($batch);
-
         $insertItem = db()->prepare('INSERT INTO move_plan_items (move_plan_id, category_id, file_entry_id, source_drive_id, target_drive_id, entry_type, size_bytes, relative_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         foreach ($batch as $item) {
-            $insertItem->execute([$planId, $categoryId, (int)$item['id'], (int)$item['drive_id'], $targetDriveId, 'file', (int)$item['size_bytes'], (string)$item['relative_path'], 'planned']);
+            $insertItem->execute([$planId, (int)$item['category_id'], (int)$item['id'], (int)$item['drive_id'], $targetDriveId, (string)$item['entry_type'], (int)$item['size_bytes'], (string)$item['relative_path'], 'planned']);
             $added++;
         }
 
@@ -77,10 +72,7 @@ try {
         $update = db()->prepare('UPDATE move_plans SET candidate_count = ?, total_size_bytes = ?, updated_at = NOW() WHERE id = ?');
         $update->execute([(int)$row['candidate_count'], (int)$row['total_size'], $planId]);
 
-        $remainingStmt = db()->prepare("SELECT COUNT(*) FROM category_manual_assignments cma JOIN file_entries f ON f.id = cma.file_entry_id AND f.is_missing = 0 AND f.entry_type = 'file' LEFT JOIN move_plan_items mpi ON mpi.move_plan_id = ? AND mpi.file_entry_id = f.id WHERE cma.assignment_type = 'file' AND cma.category_id = ? AND f.drive_id <> ? AND mpi.id IS NULL");
-        $remainingStmt->execute([$planId, $categoryId, $targetDriveId]);
-        $remaining = (int)$remainingStmt->fetchColumn();
-
+        $remaining = $repo->count(['category_id' => $categoryId, 'target_drive_id' => $targetDriveId]) - (int)$row['candidate_count'];
         if ($remaining <= 0) {
             $complete = true;
             db()->prepare("UPDATE move_plans SET status = 'draft', updated_at = NOW() WHERE id = ?")->execute([$planId]);
@@ -106,7 +98,7 @@ render_header('Plan Builder');
 <?php if ($message): ?><div class="card"><strong><?= e($message) ?></strong></div><?php endif; ?>
 <div class="card">
     <h2>Build move plan snapshot</h2>
-    <p class="muted">Builds one category to one target drive in small resume-safe batches. The selected category must be enabled for the selected target drive. This stores read-only plan items only; it does not move files.</p>
+    <p class="muted">Builds one category to one target drive in small resume-safe batches using the same safe-candidate logic as Move Candidates. This stores read-only plan items only; it does not move files.</p>
     <form method="post">
         <div class="form-grid">
             <label>Category<select name="category_id" required><option value="0">Select category</option><?php foreach ($categories as $category): ?><option value="<?= e((string)$category['id']) ?>" <?= $categoryId === (int)$category['id'] ? 'selected' : '' ?>><?= e((string)$category['name']) ?></option><?php endforeach; ?></select></label>
@@ -120,5 +112,5 @@ render_header('Plan Builder');
         <?php if ($planId > 0): ?><a class="button" href="move-plan-view.php?id=<?= e((string)$planId) ?>">View saved plan</a><?php endif; ?>
     </form>
 </div>
-<?php if ($plan): ?><div class="card"><h2>Snapshot status</h2><div class="status-bar">Plan #<?= e((string)$plan['id']) ?> | Status: <?= e((string)$plan['status']) ?> | Checked this batch: <?= e(number_format($checked)) ?> | Added this batch: <?= e(number_format($added)) ?> | Remaining: <?= e(number_format($remaining)) ?> | Items saved: <?= e(number_format((int)$plan['candidate_count'])) ?> | Total size: <?= e(format_bytes((int)$plan['total_size_bytes'])) ?></div></div><?php endif; ?>
+<?php if ($plan): ?><div class="card"><h2>Snapshot status</h2><div class="status-bar">Plan #<?= e((string)$plan['id']) ?> | Status: <?= e((string)$plan['status']) ?> | Checked this batch: <?= e(number_format($checked)) ?> | Added this batch: <?= e(number_format($added)) ?> | Remaining: <?= e(number_format(max(0, $remaining))) ?> | Items saved: <?= e(number_format((int)$plan['candidate_count'])) ?> | Total size: <?= e(format_bytes((int)$plan['total_size_bytes'])) ?></div></div><?php endif; ?>
 <?php render_footer(); ?>
