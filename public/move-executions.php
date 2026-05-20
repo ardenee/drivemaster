@@ -6,7 +6,7 @@ require dirname(__DIR__) . '/src/bootstrap.php';
 require __DIR__ . '/_layout.php';
 
 $statusFilter = (string)($_GET['status'] ?? 'active');
-$allowed = ['active', 'all', 'draft', 'failed', 'complete', 'cancelled'];
+$allowed = ['active', 'all', 'draft', 'failed', 'simulated', 'complete', 'cancelled'];
 if (!in_array($statusFilter, $allowed, true)) {
     $statusFilter = 'active';
 }
@@ -46,7 +46,7 @@ try {
 $where = '';
 $params = [];
 if ($statusFilter === 'active') {
-    $where = "WHERE mer.status NOT IN ('complete', 'cancelled')";
+    $where = "WHERE mer.status NOT IN ('complete', 'cancelled', 'simulated')";
 } elseif ($statusFilter !== 'all') {
     $where = 'WHERE mer.status = ?';
     $params[] = $statusFilter;
@@ -62,9 +62,9 @@ render_header('Move Execution Runs');
 <?php if ($error): ?><div class="card"><strong>Error:</strong> <?= e($error) ?></div><?php endif; ?>
 <div class="card">
     <h2>Move execution runs</h2>
-    <p class="muted">Execution preparation/audit records only. These pages still do not move files.</p>
-    <div class="button-row"><a class="button" href="move-plans.php">Saved Plans</a> <a class="button" href="planner-readiness.php">Readiness</a></div>
-    <div class="button-row"><?= mer_status_link('active', 'Active', $statusFilter) ?> <?= mer_status_link('draft', 'Draft', $statusFilter) ?> <?= mer_status_link('failed', 'Failed', $statusFilter) ?> <?= mer_status_link('complete', 'Complete', $statusFilter) ?> <?= mer_status_link('cancelled', 'Cancelled', $statusFilter) ?> <?= mer_status_link('all', 'All', $statusFilter) ?></div>
+    <p class="muted">Execution preparation/audit records only. Simulated runs update database audit rows only; they do not move files.</p>
+    <div class="button-row"><a class="button" href="move-plans.php">Saved Plans</a> <a class="button" href="planner-readiness.php">Readiness</a> <a class="button" href="move-execution-settings.php">Execution Settings</a></div>
+    <div class="button-row"><?= mer_status_link('active', 'Active', $statusFilter) ?> <?= mer_status_link('draft', 'Draft', $statusFilter) ?> <?= mer_status_link('failed', 'Failed', $statusFilter) ?> <?= mer_status_link('simulated', 'Simulated', $statusFilter) ?> <?= mer_status_link('complete', 'Complete', $statusFilter) ?> <?= mer_status_link('cancelled', 'Cancelled', $statusFilter) ?> <?= mer_status_link('all', 'All', $statusFilter) ?></div>
 </div>
 
 <div class="card">
@@ -86,15 +86,7 @@ render_header('Move Execution Runs');
                     <td><?= e((string)$run['created_at']) ?></td>
                     <td><?= e((string)$run['updated_at']) ?></td>
                     <td class="wrap-cell"><?= e((string)($run['error_message'] ?? '')) ?></td>
-                    <td class="actions">
-                        <a class="button" href="move-execution-view.php?id=<?= e((string)$run['id']) ?>">View</a>
-                        <?php if (in_array((string)$run['status'], ['draft', 'failed'], true)): ?>
-                            <form method="post" style="display:inline" onsubmit="return confirm('Cancel this execution run? No files will be moved.');"><input type="hidden" name="action" value="cancel_run"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button type="submit">Cancel</button></form>
-                            <form method="post" style="display:inline" onsubmit="return confirm('Delete this execution run audit record?');"><input type="hidden" name="action" value="delete_run"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button class="danger" type="submit">Delete</button></form>
-                        <?php elseif ((string)$run['status'] === 'cancelled'): ?>
-                            <form method="post" style="display:inline" onsubmit="return confirm('Delete this cancelled execution run audit record?');"><input type="hidden" name="action" value="delete_run"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button class="danger" type="submit">Delete</button></form>
-                        <?php endif; ?>
-                    </td>
+                    <td class="actions"><a class="button" href="move-execution-view.php?id=<?= e((string)$run['id']) ?>">View</a><?php if (in_array((string)$run['status'], ['draft', 'failed'], true)): ?> <form method="post" style="display:inline" onsubmit="return confirm('Cancel this execution run? No files will be moved.');"><input type="hidden" name="action" value="cancel_run"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button type="submit">Cancel</button></form> <form method="post" style="display:inline" onsubmit="return confirm('Delete this execution run audit record?');"><input type="hidden" name="action" value="delete_run"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button class="danger" type="submit">Delete</button></form><?php elseif ((string)$run['status'] === 'cancelled'): ?> <form method="post" style="display:inline" onsubmit="return confirm('Delete this cancelled execution run audit record?');"><input type="hidden" name="action" value="delete_run"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button class="danger" type="submit">Delete</button></form><?php endif; ?></td>
                 </tr>
             <?php endforeach; ?>
             <?php if (!$runs): ?><tr><td colspan="12">No execution runs match this filter.</td></tr><?php endif; ?>
