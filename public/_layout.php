@@ -38,12 +38,14 @@ function render_header(string $title): void
         <span class="nav-dropdown">
             <button type="button" class="nav-dropdown-button">Planning ▾</button>
             <span class="nav-dropdown-menu">
+                <a href="planning-dashboard.php">Planning Dashboard</a>
                 <a href="planner-readiness.php">Planner Readiness</a>
                 <a href="move-planner.php">Move Planner</a>
                 <a href="plan-builder.php">Plan Builder</a>
                 <a href="move-candidates.php">Move Candidates</a>
                 <a href="move-plans.php">Saved Plans</a>
                 <a href="move-executions.php">Execution Runs</a>
+                <a href="planning-maintenance.php">Maintenance</a>
             </span>
         </span>
         <a href="errors.php">Errors</a>
