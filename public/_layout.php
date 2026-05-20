@@ -25,8 +25,8 @@ function render_header(string $title): void
         <span class="nav-dropdown">
             <button type="button" class="nav-dropdown-button">Categories ▾</button>
             <span class="nav-dropdown-menu">
-                <a href="category-workflow.php">Category Workflow</a>
-                <a href="category-workflow-summary.php">Workflow Summary</a>
+                <a href="category-status.php">Category Status</a>
+                <a href="category-workflow-summary.php">Status Summary</a>
                 <a href="categories.php">Manage Categories</a>
                 <a href="category-targets.php">Target Drives</a>
                 <a href="category-preview.php">Preview</a>
