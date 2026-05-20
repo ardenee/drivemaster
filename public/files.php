@@ -5,8 +5,6 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 require __DIR__ . '/_layout.php';
 
-use DriveMaster\Repository\DriveRepository;
-use DriveMaster\Repository\JobRepository;
 use DriveMaster\Support\IgnoredFolderSql;
 
 const EXPLORER_PAGE_SIZE = 495;
@@ -42,30 +40,6 @@ function fp_link(array $params = [], bool $explorer = false): string
         }
     }
     return 'files.php?' . http_build_query($query) . ($explorer ? '#explorer-panel' : '');
-}
-
-function fp_selected_ids(): array
-{
-    $raw = trim((string)($_POST['selected_ids'] ?? ''));
-    if ($raw === '') {
-        return [];
-    }
-    return array_values(array_unique(array_filter(array_map('intval', explode(',', $raw)), static fn(int $id): bool => $id > 0)));
-}
-
-function fp_assert_not_ignored(array $selectedIds): void
-{
-    $selectedIds = array_values(array_unique(array_filter(array_map('intval', $selectedIds), static fn(int $id): bool => $id > 0)));
-    if (!$selectedIds) {
-        return;
-    }
-    $placeholders = implode(',', array_fill(0, count($selectedIds), '?'));
-    $visibleSql = IgnoredFolderSql::excludeCondition('f');
-    $stmt = db()->prepare("SELECT COUNT(*) FROM file_entries f WHERE f.id IN ({$placeholders}) AND {$visibleSql}");
-    $stmt->execute($selectedIds);
-    if ((int)$stmt->fetchColumn() !== count($selectedIds)) {
-        throw new RuntimeException('Selected item is inside an ignored folder and cannot be searched, categorised, moved, renamed, or deleted from this workflow.');
-    }
 }
 
 function fp_highlight(?string $value, array $terms): string
@@ -208,79 +182,6 @@ try {
 } catch (Throwable $e) {
     $categories = [];
     $error = trim(($error ? $error . ' | ' : '') . 'Could not load categories: ' . $e->getMessage());
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = (string)($_POST['action'] ?? '');
-    $returnUrl = (string)($_POST['return_url'] ?? 'files.php');
-
-    try {
-        if ($action === 'remove_drive') {
-            $driveIdPost = (int)($_POST['drive_id'] ?? 0);
-            if ($driveIdPost <= 0) {
-                throw new RuntimeException('No drive was selected.');
-            }
-            (new DriveRepository(db()))->delete($driveIdPost);
-            header('Location: files.php');
-            exit;
-        }
-
-        $selectedIds = fp_selected_ids();
-        if (!$selectedIds) {
-            throw new RuntimeException('No file/folder selection was supplied.');
-        }
-        fp_assert_not_ignored($selectedIds);
-
-        if ($action === 'add_category' || $action === 'remove_category') {
-            $categoryIdPost = (int)($_POST['context_category_id'] ?? 0);
-            if ($categoryIdPost <= 0) {
-                throw new RuntimeException('No category was selected.');
-            }
-            $placeholders = implode(',', array_fill(0, count($selectedIds), '?'));
-            $visibleSql = IgnoredFolderSql::excludeCondition('f');
-            $stmt = db()->prepare("SELECT f.id, f.drive_id, f.relative_path, f.entry_type FROM file_entries f WHERE f.id IN ({$placeholders}) AND {$visibleSql}");
-            $stmt->execute($selectedIds);
-            foreach ($stmt->fetchAll() as $entry) {
-                if ($action === 'add_category') {
-                    if ($entry['entry_type'] === 'folder') {
-                        $insert = db()->prepare("INSERT INTO category_manual_assignments (category_id, drive_id, path_prefix, assignment_type) SELECT ?, ?, ?, 'folder' WHERE NOT EXISTS (SELECT 1 FROM category_manual_assignments WHERE category_id = ? AND drive_id = ? AND path_prefix = ? AND assignment_type = 'folder')");
-                        $insert->execute([$categoryIdPost, $entry['drive_id'], $entry['relative_path'], $categoryIdPost, $entry['drive_id'], $entry['relative_path']]);
-                    } else {
-                        $insert = db()->prepare("INSERT INTO category_manual_assignments (category_id, file_entry_id, assignment_type) SELECT ?, ?, 'file' WHERE NOT EXISTS (SELECT 1 FROM category_manual_assignments WHERE category_id = ? AND file_entry_id = ? AND assignment_type = 'file')");
-                        $insert->execute([$categoryIdPost, $entry['id'], $categoryIdPost, $entry['id']]);
-                    }
-                } else {
-                    if ($entry['entry_type'] === 'folder') {
-                        $delete = db()->prepare("DELETE FROM category_manual_assignments WHERE category_id = ? AND drive_id = ? AND path_prefix = ? AND assignment_type = 'folder'");
-                        $delete->execute([$categoryIdPost, $entry['drive_id'], $entry['relative_path']]);
-                    } else {
-                        $delete = db()->prepare("DELETE FROM category_manual_assignments WHERE category_id = ? AND file_entry_id = ? AND assignment_type = 'file'");
-                        $delete->execute([$categoryIdPost, $entry['id']]);
-                    }
-                }
-            }
-        }
-
-        if (in_array($action, ['queue_move', 'queue_delete', 'queue_rename'], true)) {
-            $payload = ['file_entry_ids' => $selectedIds];
-            if ($action === 'queue_move') {
-                $payload['destination_drive_id'] = (int)($_POST['destination_drive_id'] ?? 0);
-            }
-            if ($action === 'queue_rename') {
-                $payload['new_name'] = trim((string)($_POST['new_name'] ?? ''));
-            }
-            (new JobRepository(db()))->create(match ($action) {
-                'queue_move' => 'file_move',
-                'queue_delete' => 'file_delete',
-                'queue_rename' => 'file_rename',
-            }, $payload);
-        }
-
-        header('Location: ' . $returnUrl);
-        exit;
-    } catch (Throwable $e) {
-        $error = $e->getMessage();
-    }
 }
 
 $driveId = (int)($_GET['drive_id'] ?? ($drives[0]['id'] ?? 0));
@@ -578,25 +479,8 @@ render_header('Files');
 <div id="context-menu" class="context-menu"><button type="button" data-context-action="add_category">Add to category</button><button type="button" data-context-action="remove_category">Remove from category</button><hr><button type="button" data-context-action="rename">Rename...</button><button type="button" data-context-action="move">Move...</button><button type="button" data-context-action="delete">Delete...</button></div>
 <div id="drive-context-menu" class="context-menu"><button type="button" data-drive-action="remove_drive">Remove drive from DB...</button></div>
 
-<form method="post" id="context-form"><input type="hidden" name="return_url" value="<?= e($_SERVER['REQUEST_URI'] ?? 'files.php') ?>"><input type="hidden" name="action" id="context-action-input"><input type="hidden" name="selected_ids" id="context-selected-ids"><input type="hidden" name="drive_id" id="context-drive-id">
+<form method="post" action="files-action.php" id="context-form"><input type="hidden" name="return_url" value="<?= e($_SERVER['REQUEST_URI'] ?? 'files.php') ?>"><input type="hidden" name="action" id="context-action-input"><input type="hidden" name="selected_ids" id="context-selected-ids"><input type="hidden" name="drive_id" id="context-drive-id">
     <div id="context-dialog" class="context-dialog hidden"><div class="context-dialog-card"><h3 id="context-dialog-title">Action</h3><div id="context-category-area"><label>Category <select name="context_category_id"><?php foreach ($categories as $category): ?><option value="<?= e((string)$category['id']) ?>"><?= e((string)$category['name']) ?></option><?php endforeach; ?></select></label></div><div id="context-move-area"><label>Destination drive <select name="destination_drive_id"><?php foreach ($drives as $drive): ?><option value="<?= e((string)$drive['id']) ?>"><?= e((string)$drive['friendly_name']) ?></option><?php endforeach; ?></select></label></div><div id="context-rename-area"><label>New name <input type="text" name="new_name" id="context-new-name"></label></div><p id="context-dialog-note" class="muted"></p><p><button type="submit">Confirm</button> <button type="button" id="context-cancel-button">Cancel</button></p></div></div>
 </form>
 
-<script>
-function formatBytes(bytes){bytes=Number(bytes||0);const u=['B','KB','MB','GB','TB','PB'];let i=0;while(bytes>=1024&&i<u.length-1){bytes/=1024;i++;}return i===0?Math.round(bytes)+' '+u[i]:bytes.toFixed(2)+' '+u[i];}
-function updateStatus(table){const s=document.getElementById(table.getAttribute('data-status-target'));if(!s)return;const rows=table.querySelectorAll('.selectable-row.selected-row');let size=0;rows.forEach(r=>{if(r.dataset.isFile==='1')size+=Number(r.dataset.size||0);});s.textContent='Items: '+s.dataset.totalCount+' | Files: '+s.dataset.fileCount+' | Folders: '+s.dataset.folderCount+' | Total file size: '+formatBytes(s.dataset.totalSize)+' | Selected: '+rows.length+' | Selected size: '+formatBytes(size);}
-function selectRow(row,event){const table=row.closest('.selectable-table');if(!table)return;if(!event.ctrlKey&&!event.metaKey){table.querySelectorAll('.selected-row').forEach(r=>r.classList.remove('selected-row'));}row.classList.add('selected-row');updateStatus(table);}
-function selectedIds(row){const table=row.closest('.selectable-table');const selected=table?Array.from(table.querySelectorAll('.selectable-row.selected-row')):[row];const rows=selected.includes(row)?selected:[row];return rows.map(r=>r.dataset.id).filter(Boolean);}
-document.querySelectorAll('.explorer-row,.search-result-row').forEach(row=>{row.addEventListener('click',e=>{if(row.classList.contains('selectable-row'))selectRow(row,e);});row.addEventListener('dblclick',()=>{if(row.dataset.url)location.href=row.dataset.url;});});
-document.querySelectorAll('.tree-drive,.tree-folder').forEach(row=>{row.addEventListener('click',()=>{document.querySelectorAll('.tree-drive,.tree-folder').forEach(r=>r.classList.remove('selected-row'));row.classList.add('selected-row');});row.addEventListener('dblclick',()=>{if(row.dataset.url)location.href=row.dataset.url;});});
-const menu=document.getElementById('context-menu'),driveMenu=document.getElementById('drive-context-menu'),dialog=document.getElementById('context-dialog');let contextRow=null,contextDriveId=null;
-document.querySelectorAll('.explorer-row.selectable-row').forEach(row=>{row.addEventListener('contextmenu',e=>{e.preventDefault();contextRow=row;selectRow(row,{ctrlKey:true,metaKey:false});const selectedCount=selectedIds(row).length;menu.querySelector('[data-context-action="rename"]').disabled=selectedCount!==1;menu.style.left=e.pageX+'px';menu.style.top=e.pageY+'px';menu.classList.add('visible');driveMenu.classList.remove('visible');});});
-document.querySelectorAll('.tree-drive').forEach(row=>{row.addEventListener('contextmenu',e=>{e.preventDefault();contextDriveId=row.dataset.driveId;driveMenu.style.left=e.pageX+'px';driveMenu.style.top=e.pageY+'px';driveMenu.classList.add('visible');menu.classList.remove('visible');});});
-document.addEventListener('click',e=>{if(!menu.contains(e.target))menu.classList.remove('visible');if(!driveMenu.contains(e.target))driveMenu.classList.remove('visible');});
-document.querySelectorAll('[data-context-action]').forEach(btn=>{btn.addEventListener('click',()=>{if(!contextRow||btn.disabled)return;const action=btn.dataset.contextAction;document.getElementById('context-selected-ids').value=selectedIds(contextRow).join(',');document.getElementById('context-drive-id').value='';document.getElementById('context-new-name').value=contextRow.dataset.entryName||'';document.getElementById('context-category-area').style.display=['add_category','remove_category'].includes(action)?'block':'none';document.getElementById('context-move-area').style.display=action==='move'?'block':'none';document.getElementById('context-rename-area').style.display=action==='rename'?'block':'none';document.getElementById('context-action-input').value={add_category:'add_category',remove_category:'remove_category',rename:'queue_rename',move:'queue_move',delete:'queue_delete'}[action];document.getElementById('context-dialog-title').textContent=btn.textContent;document.getElementById('context-dialog-note').textContent=action==='delete'?'Confirm delete job for selected item(s). This will queue a background job.':(['move','rename'].includes(action)?'This queues a background operation job. The disk-modifying executor still needs to be completed safely.': 'Manual category changes are separate from optional rules.');menu.classList.remove('visible');dialog.classList.remove('hidden');});});
-document.querySelector('[data-drive-action="remove_drive"]').addEventListener('click',()=>{if(!contextDriveId)return;document.getElementById('context-action-input').value='remove_drive';document.getElementById('context-selected-ids').value='1';document.getElementById('context-drive-id').value=contextDriveId;document.getElementById('context-category-area').style.display='none';document.getElementById('context-move-area').style.display='none';document.getElementById('context-rename-area').style.display='none';document.getElementById('context-dialog-title').textContent='Remove drive from DB';document.getElementById('context-dialog-note').textContent='This removes the drive record, file inventory, scan runs, and related scan jobs from the database. It does not delete files from disk.';driveMenu.classList.remove('visible');dialog.classList.remove('hidden');});
-document.getElementById('context-form').addEventListener('submit',e=>{const action=document.getElementById('context-action-input').value;if(['queue_delete','remove_drive'].includes(action)&&!confirm('Are you sure?'))e.preventDefault();});
-document.getElementById('context-cancel-button').addEventListener('click',()=>dialog.classList.add('hidden'));
-const target=document.querySelector('.target-selected-row');if(target){target.classList.add('selected-row');const table=target.closest('.selectable-table');if(table)updateStatus(table);target.scrollIntoView({block:'center',inline:'nearest'});}document.querySelectorAll('.selectable-table').forEach(updateStatus);
-</script>
 <?php render_footer(); ?>
