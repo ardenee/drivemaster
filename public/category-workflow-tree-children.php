@@ -4,16 +4,11 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/src/bootstrap.php';
 
-use DriveMaster\Support\IgnoredFolderSql;
+use DriveMaster\Repository\CategoryWorkflowRepository;
 
 function cwtc_link(array $params = []): string
 {
     return 'category-workflow.php?' . http_build_query($params) . '#workflow-explorer';
-}
-
-function cwtc_manual_match_sql(string $alias = 'f'): string
-{
-    return "EXISTS (SELECT 1 FROM category_manual_assignments cma WHERE cma.file_entry_id = {$alias}.id OR (cma.assignment_type = 'folder' AND cma.drive_id = {$alias}.drive_id AND cma.path_prefix IS NOT NULL AND ({$alias}.relative_path = cma.path_prefix OR {$alias}.relative_path LIKE CONCAT(cma.path_prefix, '/%'))))";
 }
 
 header('Content-Type: application/json; charset=utf-8');
@@ -27,13 +22,10 @@ try {
         throw new RuntimeException('Missing drive ID.');
     }
 
-    $visibleSql = IgnoredFolderSql::excludeCondition('f');
-    $unassignedSql = 'NOT ' . cwtc_manual_match_sql('f');
-    $stmt = db()->prepare("SELECT id, name, relative_path FROM file_entries f WHERE drive_id = ? AND is_missing = 0 AND entry_type = 'folder' AND {$visibleSql} AND {$unassignedSql} AND parent_path = ? ORDER BY name ASC LIMIT 1000");
-    $stmt->execute([$driveId, $parentPath]);
-
+    $workflow = new CategoryWorkflowRepository(db());
     $html = '';
-    foreach ($stmt->fetchAll() as $folder) {
+    $folders = $workflow->childFolders($driveId, $parentPath);
+    foreach ($folders as $folder) {
         $folderPath = (string)$folder['relative_path'];
         $padding = 18 + (($level + 1) * 18);
         $url = cwtc_link(['drive_id' => $driveId, 'path' => $folderPath, 'selected_entry_id' => null, 'page' => 1]);
