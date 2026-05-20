@@ -111,10 +111,11 @@ final class DriveScanner
             }
 
             $relativePath = ltrim(substr($fullPath, strlen($rootPath)), DIRECTORY_SEPARATOR);
+            $relativePath = str_replace(DIRECTORY_SEPARATOR, '/', $relativePath);
             $relativePath = $this->truncateString($relativePath, self::MAX_RELATIVE_PATH_LENGTH, $driveId, $scanRunId, $fullPath, 'relative_path_too_long', $stats);
             $name = $this->safeString(fn(): string => $item->getFilename(), basename($fullPath), $driveId, $scanRunId, 'get_filename', $stats);
             $name = $this->truncateString($name, self::MAX_NAME_LENGTH, $driveId, $scanRunId, $fullPath, 'name_too_long', $stats);
-            $parentPath = $this->safeString(fn(): string => $item->getPath(), dirname($fullPath), $driveId, $scanRunId, 'get_parent_path', $stats);
+            $parentPath = $this->relativeParentPath($relativePath);
             $parentPath = $this->truncateString($parentPath, self::MAX_PARENT_PATH_LENGTH, $driveId, $scanRunId, $fullPath, 'parent_path_too_long', $stats);
             $storedFullPath = $this->truncateString($fullPath, self::MAX_FULL_PATH_LENGTH, $driveId, $scanRunId, $fullPath, 'full_path_too_long', $stats);
             $isDir = $this->safeBool(fn(): bool => $item->isDir(), false, $driveId, $scanRunId, $fullPath, 'is_dir', $stats);
@@ -153,6 +154,15 @@ final class DriveScanner
         if ($progressCallback) {
             $progressCallback($stats, 'Scan write complete');
         }
+    }
+
+    private function relativeParentPath(string $relativePath): string
+    {
+        $relativePath = trim(str_replace('\\', '/', $relativePath), '/');
+        if ($relativePath === '' || !str_contains($relativePath, '/')) {
+            return '';
+        }
+        return substr($relativePath, 0, strrpos($relativePath, '/')) ?: '';
     }
 
     private function throwIfCancelled(?callable $cancelCallback): void
