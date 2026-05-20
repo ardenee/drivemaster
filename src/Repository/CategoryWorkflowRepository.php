@@ -24,6 +24,14 @@ final class CategoryWorkflowRepository
             : ManualCategorySql::unassignedCondition($entryAlias);
     }
 
+    private function categorySelectSql(string $entryAlias = 'f'): string
+    {
+        $matchSql = ManualCategorySql::assignmentMatchesEntry($entryAlias, 'cm');
+        return ",
+            (SELECT c.name FROM category_manual_assignments cm JOIN categories c ON c.id = cm.category_id WHERE {$matchSql} ORDER BY CASE cm.assignment_type WHEN 'file' THEN 0 ELSE 1 END, c.name LIMIT 1) AS category_name,
+            (SELECT c.color_hex FROM category_manual_assignments cm JOIN categories c ON c.id = cm.category_id WHERE {$matchSql} ORDER BY CASE cm.assignment_type WHEN 'file' THEN 0 ELSE 1 END, c.name LIMIT 1) AS category_color_hex";
+    }
+
     public function childFolders(int $driveId, string $parentPath, string $mode = 'unassigned', int $limit = self::TREE_CHILD_LIMIT): array
     {
         $visibleSql = IgnoredFolderSql::excludeCondition('f');
@@ -55,13 +63,15 @@ final class CategoryWorkflowRepository
         $dir = strtolower($dir) === 'desc' ? 'desc' : 'asc';
         $sortSql = match ($sort) {
             'type' => "CASE WHEN f.entry_type = 'folder' THEN 'Folder' ELSE COALESCE(f.extension, '') END",
+            'category' => 'category_name',
             'size' => 'f.size_bytes',
             'modified' => 'f.modified_at',
             default => 'f.name',
         };
         $visibleSql = IgnoredFolderSql::excludeCondition('f');
         $categorySql = $this->categoryFilterSql($mode, 'f');
-        $stmt = $this->db->prepare("SELECT f.id, f.drive_id, f.relative_path, f.name, f.entry_type, f.extension, f.size_bytes, f.modified_at FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$categorySql} AND f.parent_path = ? ORDER BY CASE WHEN f.entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, f.name ASC LIMIT ? OFFSET ?");
+        $categorySelectSql = $this->categorySelectSql('f');
+        $stmt = $this->db->prepare("SELECT * FROM (SELECT f.id, f.drive_id, f.relative_path, f.name, f.entry_type, f.extension, f.size_bytes, f.modified_at {$categorySelectSql} FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$categorySql} AND f.parent_path = ?) q ORDER BY CASE WHEN q.entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, q.name ASC LIMIT ? OFFSET ?");
         $stmt->bindValue(1, $driveId, PDO::PARAM_INT);
         $stmt->bindValue(2, trim($parentPath, '/'));
         $stmt->bindValue(3, $pageSize, PDO::PARAM_INT);
