@@ -10,6 +10,7 @@ function render_header(string $title): void
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title><?= e($title) ?> - DriveMaster</title>
         <link rel="stylesheet" href="assets/style.css">
+        <script src="assets/files-legacy-guard.js" defer></script>
         <script src="assets/files-extra.js" defer></script>
         <script src="assets/files-tree-context.js" defer></script>
     </head>
