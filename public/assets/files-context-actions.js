@@ -21,6 +21,8 @@
             return;
         }
 
+        form.setAttribute('action', 'files-action.php');
+
         let contextRows = [];
         let contextDriveId = '';
         let contextTreeFolder = null;
@@ -241,6 +243,7 @@
         }, true);
 
         form.addEventListener('submit', function (event) {
+            form.setAttribute('action', 'files-action.php');
             refreshReturnUrl();
             const action = actionInput.value;
             if ((action === 'queue_delete' || action === 'remove_drive') && !confirm('Are you sure?')) {
