@@ -387,6 +387,11 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    if (window.driveMasterPageMode === 'category-workflow') {
+        loadContextActionsController();
+        return;
+    }
+
     removeOldTopRightToast();
     loadIgnoredFolderFilter();
     loadAjaxExplorerController();
