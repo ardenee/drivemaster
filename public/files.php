@@ -25,12 +25,6 @@ function fp_parent(string $path): string
     return implode('/', $parts);
 }
 
-function fp_parent_expr(string $alias = ''): string
-{
-    $path = $alias === '' ? 'relative_path' : $alias . '.relative_path';
-    return "CASE WHEN LOCATE('/', {$path}) = 0 THEN '' ELSE SUBSTRING({$path}, 1, LENGTH({$path}) - LENGTH(SUBSTRING_INDEX({$path}, '/', -1)) - 1) END";
-}
-
 function fp_link(array $params = [], bool $explorer = false): string
 {
     $query = array_merge($_GET, $params);
@@ -57,9 +51,8 @@ function fp_highlight(?string $value, array $terms): string
 
 function fp_folder_children(int $driveId, string $parentPath): array
 {
-    $expr = fp_parent_expr('f');
     $visibleSql = IgnoredFolderSql::excludeCondition('f');
-    $stmt = db()->prepare("SELECT f.id, f.name, f.relative_path FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND f.entry_type = 'folder' AND {$visibleSql} AND {$expr} = ? ORDER BY f.name ASC LIMIT " . TREE_CHILD_LIMIT);
+    $stmt = db()->prepare("SELECT f.id, f.name, f.relative_path FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND f.entry_type = 'folder' AND {$visibleSql} AND f.parent_path = ? ORDER BY f.name ASC LIMIT " . TREE_CHILD_LIMIT);
     $stmt->execute([$driveId, $parentPath]);
     return $stmt->fetchAll();
 }
@@ -249,7 +242,6 @@ $explorerCategoryMap = [];
 
 try {
     if ($driveId > 0) {
-        $expr = fp_parent_expr('f');
         $visibleSql = IgnoredFolderSql::excludeCondition('f');
         $sortSql = match ($sort) {
             'type' => "CASE WHEN f.entry_type = 'folder' THEN 'Folder' ELSE COALESCE(f.extension, '') END",
@@ -258,7 +250,7 @@ try {
             default => 'f.name',
         };
 
-        $summaryStmt = db()->prepare("SELECT COUNT(*) AS total_items, SUM(f.entry_type = 'file') AS file_count, SUM(f.entry_type = 'folder') AS folder_count, COALESCE(SUM(CASE WHEN f.entry_type = 'file' THEN f.size_bytes ELSE 0 END), 0) AS total_size FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$expr} = ?");
+        $summaryStmt = db()->prepare("SELECT COUNT(*) AS total_items, SUM(f.entry_type = 'file') AS file_count, SUM(f.entry_type = 'folder') AS folder_count, COALESCE(SUM(CASE WHEN f.entry_type = 'file' THEN f.size_bytes ELSE 0 END), 0) AS total_size FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND f.parent_path = ?");
         $summaryStmt->execute([$driveId, $currentPath]);
         $summary = $summaryStmt->fetch() ?: [];
         $explorerTotalItems = (int)($summary['total_items'] ?? 0);
@@ -266,7 +258,7 @@ try {
         $explorerFolderCount = (int)($summary['folder_count'] ?? 0);
         $explorerTotalSize = (int)($summary['total_size'] ?? 0);
 
-        $stmt = db()->prepare("SELECT f.id, f.relative_path, f.name, f.extension, f.entry_type, f.size_bytes, f.modified_at FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$expr} = ? ORDER BY CASE WHEN f.entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, f.name ASC LIMIT ? OFFSET ?");
+        $stmt = db()->prepare("SELECT f.id, f.relative_path, f.name, f.extension, f.entry_type, f.size_bytes, f.modified_at FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND f.parent_path = ? ORDER BY CASE WHEN f.entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, f.name ASC LIMIT ? OFFSET ?");
         $stmt->bindValue(1, $driveId, PDO::PARAM_INT);
         $stmt->bindValue(2, $currentPath);
         $stmt->bindValue(3, EXPLORER_PAGE_SIZE, PDO::PARAM_INT);
