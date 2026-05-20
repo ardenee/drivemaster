@@ -50,6 +50,16 @@ function job_icon(array $job): string
     return in_array((string)$job['job_type'], ['scan_drive', 'refresh_drive_info'], true) ? '💽' : '⚙️';
 }
 
+function job_context_links(array $job): string
+{
+    $payload = job_payload($job);
+    if ((string)$job['job_type'] === 'move_plan_dry_run' && !empty($payload['move_plan_id'])) {
+        $planId = (int)$payload['move_plan_id'];
+        return '<a class="button" href="move-plan-view.php?id=' . e((string)$planId) . '">Plan</a> <a class="button" href="move-plan-dry-runs.php?id=' . e((string)$planId) . '">Dry-runs</a>';
+    }
+    return '';
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     $id = (int)($_POST['id'] ?? 0);
@@ -114,14 +124,14 @@ render_header('Jobs');
 
 <div class="card">
     <h2>Background jobs</h2>
-    <p class="muted">Scans and future move operations run from the CLI worker. This page updates job status every 5 seconds without refreshing.</p>
+    <p class="muted">Scans, dry-runs, and future move operations run from the CLI worker. This page updates job status every 5 seconds without refreshing.</p>
     <form class="inline-actions" method="post" onsubmit="return confirm('Remove all complete, failed, and cancelled jobs?');">
         <input type="hidden" name="action" value="delete_finished">
         <button class="danger" type="submit">Remove finished jobs</button>
     </form>
     <div class="table-scroll">
         <table class="jobs-table auto-table compact-table">
-            <thead><tr><th>ID</th><th>Drive</th><th>Type</th><th>Status</th><th>Progress</th><th>Message</th><th>Error</th><th>Heartbeat</th><th>Created</th><th>Actions</th></tr></thead>
+            <thead><tr><th>ID</th><th>Drive</th><th>Type</th><th>Status</th><th>Progress</th><th>Message</th><th>Error</th><th>Heartbeat</th><th>Created</th><th>Links</th><th>Actions</th></tr></thead>
             <tbody>
             <?php foreach ($jobs as $job): ?>
                 <?php
@@ -146,6 +156,7 @@ render_header('Jobs');
                     <td data-field="error_message"><?= e($job['error_message']) ?></td>
                     <td data-field="last_heartbeat_at"><?= e($job['last_heartbeat_at'] ?? '') ?></td>
                     <td data-field="created_at" title="Finished: <?= e($job['finished_at'] ?? '') ?>"><?= e($job['created_at']) ?></td>
+                    <td class="actions"><?= job_context_links($job) ?></td>
                     <td class="actions">
                         <?php if (in_array($status, ['queued', 'running'], true) && !$cancelRequested): ?>
                             <form method="post" style="display:inline"><input type="hidden" name="id" value="<?= e((string)$job['id']) ?>"><input type="hidden" name="action" value="cancel"><button class="danger" type="submit">Cancel</button></form>
