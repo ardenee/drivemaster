@@ -67,12 +67,19 @@ $totalItems = 0;
 $totalFiles = 0;
 $totalFolders = 0;
 $totalSize = 0;
+$drives = [];
+$categories = [];
 
 try {
     $drives = db()->query('SELECT id, friendly_name FROM drives ORDER BY friendly_name')->fetchAll();
 } catch (Throwable $e) {
-    $drives = [];
     $error = 'Could not load drives: ' . $e->getMessage();
+}
+
+try {
+    $categories = db()->query('SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name')->fetchAll();
+} catch (Throwable $e) {
+    $error = trim(($error ? $error . ' | ' : '') . 'Could not load categories: ' . $e->getMessage());
 }
 
 $status = (string)($_GET['status'] ?? 'uncategorised');
@@ -149,7 +156,7 @@ render_header('Category Workflow');
 
 <div class="card">
     <h2>Category Workflow</h2>
-    <p class="muted">Use this page to find files and folders that still need category assignment.</p>
+    <p class="muted">Use this page to find files and folders that still need category assignment. Right-click one or more rows to add/remove a category.</p>
     <form method="get">
         <div class="form-grid compact-search">
             <label>Status
@@ -185,12 +192,12 @@ render_header('Category Workflow');
     <h2>Results</h2>
     <p class="muted">Matches: <?= e(number_format($totalItems)) ?> | Files: <?= e(number_format($totalFiles)) ?> | Folders: <?= e(number_format($totalFolders)) ?> | File size: <?= e(format_bytes($totalSize)) ?> | Showing: <?= e(number_format(count($rows))) ?></p>
     <div class="table-scroll">
-        <table class="auto-table">
+        <table class="auto-table selectable-table" data-status-target="workflow-status">
             <thead><tr><th>Drive</th><th>Name</th><th>Type</th><th>Category</th><th>Path</th><th>Size</th><th>Modified</th><th>Open</th></tr></thead>
             <tbody>
                 <?php foreach ($rows as $row): ?>
                     <?php $openUrl = 'files.php?' . http_build_query(['drive_id' => (int)$row['drive_id'], 'path' => cw_parent((string)$row['relative_path']), 'selected_entry_id' => (int)$row['id'], 'explorer_page' => 1]) . '#explorer-panel'; ?>
-                    <tr>
+                    <tr class="search-result-row selectable-row" data-id="<?= e((string)$row['id']) ?>" data-entry-type="<?= e((string)$row['entry_type']) ?>" data-entry-name="<?= e((string)$row['name']) ?>" data-url="<?= e($openUrl) ?>" data-size="<?= e((string)(int)$row['size_bytes']) ?>" data-is-file="<?= $row['entry_type'] === 'file' ? '1' : '0' ?>">
                         <td><?= e((string)$row['friendly_name']) ?></td>
                         <td><?= $row['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= e((string)$row['name']) ?></td>
                         <td><?= e($row['entry_type'] === 'folder' ? 'Folder' : strtoupper((string)$row['extension']) . ' File') ?></td>
@@ -205,6 +212,14 @@ render_header('Category Workflow');
             </tbody>
         </table>
     </div>
+    <div class="status-bar" id="workflow-status" data-total-count="<?= e((string)$totalItems) ?>" data-total-size="<?= e((string)$totalSize) ?>" data-file-count="<?= e((string)$totalFiles) ?>" data-folder-count="<?= e((string)$totalFolders) ?>"></div>
 </div>
+
+<div id="context-menu" class="context-menu"><button type="button" data-context-action="add_category">Add to category</button><button type="button" data-context-action="remove_category">Remove from category</button><hr><button type="button" data-context-action="rename">Rename...</button><button type="button" data-context-action="move">Move...</button><button type="button" data-context-action="delete">Delete...</button></div>
+<div id="drive-context-menu" class="context-menu"><button type="button" data-drive-action="remove_drive">Remove drive from DB...</button></div>
+
+<form method="post" action="files-action.php" id="context-form"><input type="hidden" name="return_url" value="<?= e($_SERVER['REQUEST_URI'] ?? 'category-workflow.php') ?>"><input type="hidden" name="action" id="context-action-input"><input type="hidden" name="selected_ids" id="context-selected-ids"><input type="hidden" name="drive_id" id="context-drive-id">
+    <div id="context-dialog" class="context-dialog hidden"><div class="context-dialog-card"><h3 id="context-dialog-title">Action</h3><div id="context-category-area"><label>Category <select name="context_category_id"><?php foreach ($categories as $category): ?><option value="<?= e((string)$category['id']) ?>"><?= e((string)$category['name']) ?></option><?php endforeach; ?></select></label></div><div id="context-move-area"><label>Destination drive <select name="destination_drive_id"><?php foreach ($drives as $drive): ?><option value="<?= e((string)$drive['id']) ?>"><?= e((string)$drive['friendly_name']) ?></option><?php endforeach; ?></select></label></div><div id="context-rename-area"><label>New name <input type="text" name="new_name" id="context-new-name"></label></div><p id="context-dialog-note" class="muted"></p><p><button type="submit">Confirm</button> <button type="button" id="context-cancel-button">Cancel</button></p></div></div>
+</form>
 
 <?php render_footer(); ?>
