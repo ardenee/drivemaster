@@ -38,6 +38,14 @@ if ($validatedItems <= 0) {
     exit;
 }
 
+$existingStmt = db()->prepare("SELECT id FROM jobs WHERE job_type = 'move_plan_dry_run' AND status IN ('queued', 'running') AND CAST(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.move_plan_id')) AS UNSIGNED) = ? ORDER BY id DESC LIMIT 1");
+$existingStmt->execute([$planId]);
+$existingJobId = (int)($existingStmt->fetchColumn() ?: 0);
+if ($existingJobId > 0) {
+    header('Location: jobs.php?created=' . $existingJobId);
+    exit;
+}
+
 $jobs = new JobRepository(db());
 $jobId = $jobs->create('move_plan_dry_run', [
     'move_plan_id' => $planId,
