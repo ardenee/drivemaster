@@ -49,6 +49,9 @@ function render_header(string $title): void
                 <a href="planning-maintenance.php">Maintenance</a>
             </span>
         </span>
+        <a href="users.php">Users</a>
+        <a href="login.php">Login</a>
+        <a href="logout.php">Logout</a>
         <a href="errors.php">Errors</a>
         <a href="health.php">Health</a>
     </nav>
