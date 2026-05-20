@@ -34,20 +34,20 @@ function cw_on_branch(string $folderPath, string $activePath): bool
     return $folderPath !== '' && ($folderPath === $activePath || str_starts_with($activePath, $folderPath . '/'));
 }
 
-function cw_render_tree(CategoryWorkflowRepository $workflow, int $driveId, string $parentPath, string $activePath, int $level = 0): void
+function cw_render_tree(CategoryWorkflowRepository $workflow, int $driveId, string $parentPath, string $activePath, string $mode, int $level = 0): void
 {
-    foreach ($workflow->childFolders($driveId, $parentPath) as $folder) {
+    foreach ($workflow->childFolders($driveId, $parentPath, $mode) as $folder) {
         $folderPath = (string)$folder['relative_path'];
         $isOpen = cw_on_branch($folderPath, $activePath);
         $isActive = $folderPath === $activePath;
         $padding = 18 + ($level * 18);
         ?>
-        <div class="tree-folder selectable-row <?= $isActive ? 'selected selected-row' : '' ?>" style="padding-left: <?= e((string)$padding) ?>px" data-id="<?= e((string)$folder['id']) ?>" data-entry-type="folder" data-entry-name="<?= e((string)$folder['name']) ?>" data-size="0" data-is-file="0" data-drive-id="<?= e((string)$driveId) ?>" data-path="<?= e($folderPath) ?>" data-level="<?= e((string)$level) ?>" data-loaded="<?= $isOpen ? '1' : '0' ?>" data-url="<?= e(cw_link(['drive_id' => $driveId, 'path' => $folderPath, 'selected_entry_id' => null, 'page' => 1])) ?>">
+        <div class="tree-folder selectable-row <?= $isActive ? 'selected selected-row' : '' ?>" style="padding-left: <?= e((string)$padding) ?>px" data-id="<?= e((string)$folder['id']) ?>" data-entry-type="folder" data-entry-name="<?= e((string)$folder['name']) ?>" data-size="0" data-is-file="0" data-drive-id="<?= e((string)$driveId) ?>" data-path="<?= e($folderPath) ?>" data-level="<?= e((string)$level) ?>" data-loaded="<?= $isOpen ? '1' : '0' ?>" data-url="<?= e(cw_link(['drive_id' => $driveId, 'path' => $folderPath, 'selected_entry_id' => null, 'page' => 1, 'mode' => $mode])) ?>">
             <span class="tree-toggle"><?= $isOpen ? '▾' : '▸' ?></span><span class="folder-icon">📁</span> <?= e((string)$folder['name']) ?>
         </div>
         <?php
         if ($isOpen) {
-            cw_render_tree($workflow, $driveId, $folderPath, $activePath, $level + 1);
+            cw_render_tree($workflow, $driveId, $folderPath, $activePath, $mode, $level + 1);
         }
     }
 }
@@ -85,6 +85,11 @@ $page = max(1, (int)($_GET['page'] ?? 1));
 $sort = (string)($_GET['sort'] ?? 'name');
 $dir = strtolower((string)($_GET['dir'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
 $nextDir = $dir === 'asc' ? 'desc' : 'asc';
+$mode = (string)($_GET['mode'] ?? 'unassigned');
+$mode = $mode === 'assigned' ? 'assigned' : 'unassigned';
+$modeLabel = $mode === 'assigned' ? 'Categorised' : 'Uncategorised';
+$oppositeMode = $mode === 'assigned' ? 'unassigned' : 'assigned';
+$oppositeLabel = $mode === 'assigned' ? 'Show uncategorised' : 'Show categorised';
 
 $selectedDrive = null;
 foreach ($drives as $drive) {
@@ -100,7 +105,7 @@ if (!$selectedDrive && $drives) {
 
 try {
     if ($driveId > 0) {
-        $summary = $workflow->folderSummary($driveId, $currentPath);
+        $summary = $workflow->folderSummary($driveId, $currentPath, $mode);
         $totalItems = (int)$summary['total_items'];
         $fileCount = (int)$summary['file_count'];
         $folderCount = (int)$summary['folder_count'];
@@ -110,7 +115,7 @@ try {
             $page = $totalPages;
         }
         $offset = ($page - 1) * CategoryWorkflowRepository::PAGE_SIZE;
-        $children = $workflow->folderChildren($driveId, $currentPath, $sort, $dir, $page);
+        $children = $workflow->folderChildren($driveId, $currentPath, $sort, $dir, $page, $mode);
 
         $running = '';
         foreach (array_filter(explode('/', $currentPath), static fn(string $v): bool => $v !== '') as $part) {
@@ -118,21 +123,28 @@ try {
             $breadcrumbs[] = ['name' => $part, 'path' => $running];
         }
     } else {
-        $notice = 'Add or scan a drive before using Category Workflow.';
+        $notice = 'Add or scan a drive before using Category Browser.';
     }
 } catch (Throwable $e) {
-    $error = trim(($error ? $error . ' | ' : '') . 'Could not load workflow folder: ' . $e->getMessage());
+    $error = trim(($error ? $error . ' | ' : '') . 'Could not load category browser folder: ' . $e->getMessage());
 }
 
-render_header('Category Workflow');
+render_header('Category Browser');
 ?>
 <script>window.driveMasterPageMode = 'category-workflow';</script>
 <?php if ($error): ?><div class="card"><strong>Error:</strong> <?= e($error) ?></div><?php endif; ?>
 <?php if ($notice): ?><div class="card"><strong>Notice:</strong> <?= e($notice) ?></div><?php endif; ?>
 
 <div class="card">
-    <h2>Category Workflow</h2>
-    <p class="muted">Browse one drive at a time. This view only shows files/folders in the current folder that do not have a manual category assignment. Assign a category and the item disappears from this workflow after refresh.</p>
+    <h2>Category Browser</h2>
+    <p class="muted">Browse one drive at a time and switch between uncategorised items that still need assignment and categorised items already covered by a manual category rule. This page is mainly a category status/browser with right-click actions, not an automated workflow wizard.</p>
+    <div class="button-row">
+        <a class="button <?= $mode === 'unassigned' ? 'selected-row' : '' ?>" href="<?= e(cw_link(['mode' => 'unassigned', 'page' => 1, 'selected_entry_id' => null])) ?>">Show uncategorised</a>
+        <a class="button <?= $mode === 'assigned' ? 'selected-row' : '' ?>" href="<?= e(cw_link(['mode' => 'assigned', 'page' => 1, 'selected_entry_id' => null])) ?>">Show categorised</a>
+        <a class="button" href="category-workflow-summary.php">Workflow Summary</a>
+        <a class="button" href="category-conflicts.php">Conflicts</a>
+    </div>
+    <div class="status-bar">Current view: <?= e($modeLabel) ?> items</div>
 </div>
 
 <?php if (!$drives): ?>
@@ -143,29 +155,29 @@ render_header('Category Workflow');
         <h3>Drives</h3>
         <?php foreach ($drives as $drive): ?>
             <?php $thisDriveId = (int)$drive['id']; $isSelected = $driveId === $thisDriveId; ?>
-            <div class="tree-drive <?= $isSelected ? 'selected selected-row' : '' ?>" data-drive-id="<?= e((string)$thisDriveId) ?>" data-loaded="<?= $isSelected ? '1' : '0' ?>" data-url="<?= e(cw_link(['drive_id' => $thisDriveId, 'path' => '', 'selected_entry_id' => null, 'page' => 1])) ?>">
+            <div class="tree-drive <?= $isSelected ? 'selected selected-row' : '' ?>" data-drive-id="<?= e((string)$thisDriveId) ?>" data-loaded="<?= $isSelected ? '1' : '0' ?>" data-url="<?= e(cw_link(['drive_id' => $thisDriveId, 'path' => '', 'selected_entry_id' => null, 'page' => 1, 'mode' => $mode])) ?>">
                 <span class="tree-toggle"><?= $isSelected ? '▾' : '▸' ?></span> 💽 <?= e((string)$drive['friendly_name']) ?>
             </div>
-            <?php if ($isSelected): ?><?php cw_render_tree($workflow, $thisDriveId, '', $currentPath); ?><?php endif; ?>
+            <?php if ($isSelected): ?><?php cw_render_tree($workflow, $thisDriveId, '', $currentPath, $mode); ?><?php endif; ?>
         <?php endforeach; ?>
     </div>
 
     <div class="explorer-main">
         <div class="breadcrumbs">
-            <a href="<?= e(cw_link(['drive_id' => $driveId, 'path' => '', 'page' => 1])) ?>" data-workflow-path="" data-drive-id="<?= e((string)$driveId) ?>"><?= e((string)($selectedDrive['friendly_name'] ?? 'Drive')) ?></a>
-            <?php foreach ($breadcrumbs as $crumb): ?> / <a href="<?= e(cw_link(['drive_id' => $driveId, 'path' => $crumb['path'], 'page' => 1])) ?>" data-workflow-path="<?= e((string)$crumb['path']) ?>" data-drive-id="<?= e((string)$driveId) ?>"><?= e((string)$crumb['name']) ?></a><?php endforeach; ?>
+            <a href="<?= e(cw_link(['drive_id' => $driveId, 'path' => '', 'page' => 1, 'mode' => $mode])) ?>" data-workflow-path="" data-drive-id="<?= e((string)$driveId) ?>"><?= e((string)($selectedDrive['friendly_name'] ?? 'Drive')) ?></a>
+            <?php foreach ($breadcrumbs as $crumb): ?> / <a href="<?= e(cw_link(['drive_id' => $driveId, 'path' => $crumb['path'], 'page' => 1, 'mode' => $mode])) ?>" data-workflow-path="<?= e((string)$crumb['path']) ?>" data-drive-id="<?= e((string)$driveId) ?>"><?= e((string)$crumb['name']) ?></a><?php endforeach; ?>
         </div>
 
         <?php if ($totalItems > CategoryWorkflowRepository::PAGE_SIZE): ?>
-            <div class="status-bar workflow-explorer-pager">Showing <?= e((string)($offset + 1)) ?>-<?= e((string)min($offset + count($children), $totalItems)) ?> of <?= e(number_format($totalItems)) ?> unassigned entries in this folder. <a class="button" href="<?= e(cw_link(['page' => max(1, $page - 1)])) ?>" data-workflow-page="<?= e((string)max(1, $page - 1)) ?>">Previous</a> <a class="button" href="<?= e(cw_link(['page' => min($totalPages, $page + 1)])) ?>" data-workflow-page="<?= e((string)min($totalPages, $page + 1)) ?>">Next</a></div>
+            <div class="status-bar workflow-explorer-pager">Showing <?= e((string)($offset + 1)) ?>-<?= e((string)min($offset + count($children), $totalItems)) ?> of <?= e(number_format($totalItems)) ?> <?= e(strtolower($modeLabel)) ?> entries in this folder. <a class="button" href="<?= e(cw_link(['page' => max(1, $page - 1), 'mode' => $mode])) ?>" data-workflow-page="<?= e((string)max(1, $page - 1)) ?>">Previous</a> <a class="button" href="<?= e(cw_link(['page' => min($totalPages, $page + 1), 'mode' => $mode])) ?>" data-workflow-page="<?= e((string)min($totalPages, $page + 1)) ?>">Next</a></div>
         <?php endif; ?>
 
         <table class="explorer-table selectable-table" data-status-target="workflow-status">
-            <thead><tr><?php foreach (['name' => 'Name', 'type' => 'Type', 'size' => 'Size', 'modified' => 'Modified'] as $key => $label): ?><th><a href="<?= e(cw_link(['sort' => $key, 'dir' => $sort === $key ? $nextDir : 'asc', 'page' => 1])) ?>"><?= e($label) ?><?= $sort === $key ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th><?php endforeach; ?></tr></thead>
+            <thead><tr><?php foreach (['name' => 'Name', 'type' => 'Type', 'size' => 'Size', 'modified' => 'Modified'] as $key => $label): ?><th><a href="<?= e(cw_link(['sort' => $key, 'dir' => $sort === $key ? $nextDir : 'asc', 'page' => 1, 'mode' => $mode])) ?>"><?= e($label) ?><?= $sort === $key ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th><?php endforeach; ?></tr></thead>
             <tbody>
-                <?php if ($currentPath !== ''): ?><tr class="explorer-row" data-url="<?= e(cw_link(['path' => cw_parent($currentPath), 'page' => 1])) ?>" data-workflow-path="<?= e(cw_parent($currentPath)) ?>" data-drive-id="<?= e((string)$driveId) ?>"><td>↩ ..</td><td>Folder</td><td></td><td></td></tr><?php endif; ?>
+                <?php if ($currentPath !== ''): ?><tr class="explorer-row" data-url="<?= e(cw_link(['path' => cw_parent($currentPath), 'page' => 1, 'mode' => $mode])) ?>" data-workflow-path="<?= e(cw_parent($currentPath)) ?>" data-drive-id="<?= e((string)$driveId) ?>"><td>↩ ..</td><td>Folder</td><td></td><td></td></tr><?php endif; ?>
                 <?php foreach ($children as $entry): ?>
-                    <?php $entryUrl = $entry['entry_type'] === 'folder' ? cw_link(['drive_id' => $driveId, 'path' => $entry['relative_path'], 'selected_entry_id' => null, 'page' => 1]) : ''; ?>
+                    <?php $entryUrl = $entry['entry_type'] === 'folder' ? cw_link(['drive_id' => $driveId, 'path' => $entry['relative_path'], 'selected_entry_id' => null, 'page' => 1, 'mode' => $mode]) : ''; ?>
                     <tr id="entry-<?= e((string)$entry['id']) ?>" class="search-result-row explorer-row selectable-row <?= $selectedEntryId === (int)$entry['id'] ? 'selected-row target-selected-row' : '' ?>" data-id="<?= e((string)$entry['id']) ?>" data-entry-type="<?= e((string)$entry['entry_type']) ?>" data-entry-name="<?= e((string)$entry['name']) ?>" data-url="<?= e($entryUrl) ?>" data-workflow-path="<?= e($entry['entry_type'] === 'folder' ? (string)$entry['relative_path'] : '') ?>" data-drive-id="<?= e((string)$driveId) ?>" data-size="<?= e((string)(int)$entry['size_bytes']) ?>" data-is-file="<?= $entry['entry_type'] === 'file' ? '1' : '0' ?>">
                         <td><?= $entry['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= e((string)$entry['name']) ?></td>
                         <td><?= e($entry['entry_type'] === 'folder' ? 'Folder' : strtoupper((string)$entry['extension']) . ' File') ?></td>
@@ -173,15 +185,15 @@ render_header('Category Workflow');
                         <td><?= e((string)$entry['modified_at']) ?></td>
                     </tr>
                 <?php endforeach; ?>
-                <?php if (!$children): ?><tr><td colspan="4">No unassigned entries in this folder.</td></tr><?php endif; ?>
+                <?php if (!$children): ?><tr><td colspan="4">No <?= e(strtolower($modeLabel)) ?> entries in this folder.</td></tr><?php endif; ?>
             </tbody>
         </table>
 
         <?php if ($totalItems > CategoryWorkflowRepository::PAGE_SIZE): ?>
-            <div class="status-bar workflow-explorer-pager">Page <?= e((string)$page) ?> of <?= e((string)$totalPages) ?>. <a class="button" href="<?= e(cw_link(['page' => max(1, $page - 1)])) ?>" data-workflow-page="<?= e((string)max(1, $page - 1)) ?>">Previous</a> <a class="button" href="<?= e(cw_link(['page' => min($totalPages, $page + 1)])) ?>" data-workflow-page="<?= e((string)min($totalPages, $page + 1)) ?>">Next</a></div>
+            <div class="status-bar workflow-explorer-pager">Page <?= e((string)$page) ?> of <?= e((string)$totalPages) ?>. <a class="button" href="<?= e(cw_link(['page' => max(1, $page - 1), 'mode' => $mode])) ?>" data-workflow-page="<?= e((string)max(1, $page - 1)) ?>">Previous</a> <a class="button" href="<?= e(cw_link(['page' => min($totalPages, $page + 1), 'mode' => $mode])) ?>" data-workflow-page="<?= e((string)min($totalPages, $page + 1)) ?>">Next</a></div>
         <?php endif; ?>
 
-        <div class="status-bar" id="workflow-status" data-total-count="<?= e((string)$totalItems) ?>" data-total-size="<?= e((string)$totalSize) ?>" data-file-count="<?= e((string)$fileCount) ?>" data-folder-count="<?= e((string)$folderCount) ?>">Unassigned in this folder: <?= e(number_format($totalItems)) ?> | Files: <?= e(number_format($fileCount)) ?> | Folders: <?= e(number_format($folderCount)) ?> | File size: <?= e(format_bytes($totalSize)) ?></div>
+        <div class="status-bar" id="workflow-status" data-total-count="<?= e((string)$totalItems) ?>" data-total-size="<?= e((string)$totalSize) ?>" data-file-count="<?= e((string)$fileCount) ?>" data-folder-count="<?= e((string)$folderCount) ?>"><?= e($modeLabel) ?> in this folder: <?= e(number_format($totalItems)) ?> | Files: <?= e(number_format($fileCount)) ?> | Folders: <?= e(number_format($folderCount)) ?> | File size: <?= e(format_bytes($totalSize)) ?></div>
     </div>
 </div>
 <?php endif; ?>
