@@ -7,6 +7,23 @@ require __DIR__ . '/_layout.php';
 
 use DriveMaster\Support\Auth;
 
+function users_is_default_admin(array $user): bool
+{
+    return (int)$user['id'] === 1 || strcasecmp((string)$user['username'], 'admin') === 0;
+}
+
+function users_load(int $id): ?array
+{
+    $stmt = db()->prepare('SELECT id, username, display_name, role, is_active FROM users WHERE id = ?');
+    $stmt->execute([$id]);
+    return $stmt->fetch() ?: null;
+}
+
+function users_admin_count(): int
+{
+    return (int)db()->query("SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1")->fetchColumn();
+}
+
 Auth::ensureTable(db());
 if (Auth::userCount(db()) > 0) {
     require_admin();
@@ -19,14 +36,70 @@ try {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = (string)($_POST['action'] ?? '');
         $id = max(0, (int)($_POST['id'] ?? 0));
+
+        if ($action === 'create') {
+            $username = trim((string)($_POST['username'] ?? ''));
+            $displayName = trim((string)($_POST['display_name'] ?? ''));
+            $role = (string)($_POST['role'] ?? 'user') === 'admin' ? 'admin' : 'user';
+            $secret = (string)($_POST['access_value'] ?? '');
+            $confirm = (string)($_POST['access_confirm'] ?? '');
+            if ($secret !== $confirm) {
+                throw new RuntimeException('Access entries do not match.');
+            }
+            if (strlen($secret) < 10) {
+                throw new RuntimeException('Access value must be at least 10 characters.');
+            }
+            Auth::createUser(db(), $username, $displayName, $secret, $role, 1);
+            $message = 'User created.';
+        }
+
         if ($action === 'toggle' && $id > 0) {
+            $user = users_load($id);
+            if (!$user) {
+                throw new RuntimeException('User not found.');
+            }
+            if (users_is_default_admin($user)) {
+                throw new RuntimeException('The default admin account cannot be disabled.');
+            }
+            if ((int)$user['is_active'] === 1 && (string)$user['role'] === 'admin' && users_admin_count() <= 1) {
+                throw new RuntimeException('Cannot disable the last active administrator.');
+            }
             db()->prepare('UPDATE users SET is_active = 1 - is_active WHERE id = ?')->execute([$id]);
             $message = 'User status updated.';
         }
+
         if ($action === 'role' && $id > 0) {
+            $user = users_load($id);
+            if (!$user) {
+                throw new RuntimeException('User not found.');
+            }
             $role = (string)($_POST['role'] ?? 'user') === 'admin' ? 'admin' : 'user';
+            if (users_is_default_admin($user) && $role !== 'admin') {
+                throw new RuntimeException('The default admin account cannot be changed to a user.');
+            }
+            if ((string)$user['role'] === 'admin' && $role !== 'admin' && users_admin_count() <= 1) {
+                throw new RuntimeException('Cannot demote the last active administrator.');
+            }
             db()->prepare('UPDATE users SET role = ? WHERE id = ?')->execute([$role, $id]);
             $message = 'User role updated.';
+        }
+
+        if ($action === 'delete' && $id > 0) {
+            $user = users_load($id);
+            if (!$user) {
+                throw new RuntimeException('User not found.');
+            }
+            if (users_is_default_admin($user)) {
+                throw new RuntimeException('The default admin account cannot be deleted.');
+            }
+            if ($id === (int)(current_user()['id'] ?? 0)) {
+                throw new RuntimeException('You cannot delete the account you are currently using.');
+            }
+            if ((string)$user['role'] === 'admin' && (int)$user['is_active'] === 1 && users_admin_count() <= 1) {
+                throw new RuntimeException('Cannot delete the last active administrator.');
+            }
+            db()->prepare('DELETE FROM users WHERE id = ?')->execute([$id]);
+            $message = 'User deleted.';
         }
     }
 } catch (Throwable $e) {
@@ -38,15 +111,43 @@ render_header('Users');
 ?>
 <?php if ($message): ?><div class="card"><strong><?= e($message) ?></strong></div><?php endif; ?>
 <?php if ($error): ?><div class="card"><strong>Error:</strong> <?= e($error) ?></div><?php endif; ?>
-<?php if (!$users): ?><div class="card"><strong>No users exist yet.</strong> Add the first row directly in the database, then this page can manage status and role.</div><?php endif; ?>
+<?php if (!$users): ?><div class="card"><strong>No users exist yet.</strong> Create the first admin account below. Until a user exists, DriveMaster remains accessible to avoid lockout.</div><?php endif; ?>
+<div class="card">
+    <h2>Create user</h2>
+    <form method="post">
+        <input type="hidden" name="action" value="create">
+        <div class="form-grid">
+            <label>Username <input type="text" name="username" required></label>
+            <label>Display name <input type="text" name="display_name"></label>
+            <label>Role <select name="role"><option value="user">User</option><option value="admin" <?= !$users ? 'selected' : '' ?>>Admin</option></select></label>
+            <label>Access value <input type="password" name="access_value" required></label>
+            <label>Confirm access value <input type="password" name="access_confirm" required></label>
+        </div>
+        <button type="submit">Create user</button>
+    </form>
+</div>
 <div class="card">
     <h2>Users</h2>
-    <p class="muted">Administrators can enable/disable users and change roles here.</p>
+    <p class="muted">The default admin account cannot be demoted, disabled, or deleted.</p>
     <div class="table-scroll"><table class="auto-table compact-table"><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Active</th><th>Last login</th><th>Created</th><th>Actions</th></tr></thead><tbody>
     <?php foreach ($users as $user): ?>
+        <?php $isDefaultAdmin = users_is_default_admin($user); ?>
         <tr>
-            <td><?= e($user['username']) ?></td><td><?= e($user['display_name']) ?></td><td><?= e($user['role']) ?></td><td><?= (int)$user['is_active'] === 1 ? 'Yes' : 'No' ?></td><td><?= e($user['last_login_at'] ?? '') ?></td><td><?= e($user['created_at']) ?></td>
-            <td class="actions"><form method="post" style="display:inline"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><button type="submit"><?= (int)$user['is_active'] === 1 ? 'Disable' : 'Enable' ?></button></form> <form method="post" style="display:inline"><input type="hidden" name="action" value="role"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><input type="hidden" name="role" value="<?= $user['role'] === 'admin' ? 'user' : 'admin' ?>"><button type="submit">Make <?= $user['role'] === 'admin' ? 'User' : 'Admin' ?></button></form></td>
+            <td><?= e($user['username']) ?><?= $isDefaultAdmin ? ' <strong>(protected)</strong>' : '' ?></td>
+            <td><?= e($user['display_name']) ?></td>
+            <td><?= e($user['role']) ?></td>
+            <td><?= (int)$user['is_active'] === 1 ? 'Yes' : 'No' ?></td>
+            <td><?= e($user['last_login_at'] ?? '') ?></td>
+            <td><?= e($user['created_at']) ?></td>
+            <td class="actions">
+                <?php if (!$isDefaultAdmin): ?>
+                    <form method="post" style="display:inline"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><button type="submit"><?= (int)$user['is_active'] === 1 ? 'Disable' : 'Enable' ?></button></form>
+                    <form method="post" style="display:inline"><input type="hidden" name="action" value="role"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><input type="hidden" name="role" value="<?= $user['role'] === 'admin' ? 'user' : 'admin' ?>"><button type="submit">Make <?= $user['role'] === 'admin' ? 'User' : 'Admin' ?></button></form>
+                    <form method="post" style="display:inline" onsubmit="return confirm('Delete this user?');"><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><button class="danger" type="submit">Delete</button></form>
+                <?php else: ?>
+                    Protected
+                <?php endif; ?>
+            </td>
         </tr>
     <?php endforeach; ?>
     <?php if (!$users): ?><tr><td colspan="7">No users found.</td></tr><?php endif; ?>
