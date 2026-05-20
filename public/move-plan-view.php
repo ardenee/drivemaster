@@ -22,6 +22,13 @@ function mpv_json(?string $json): array
     }
 }
 
+function mpv_builder_url(array $plan): string
+{
+    $categories = mpv_json($plan['selected_category_ids_json'] ?? null);
+    $drives = mpv_json($plan['selected_drive_ids_json'] ?? null);
+    return 'plan-builder.php?plan_id=' . (int)$plan['id'] . '&category_id=' . (int)($categories[0] ?? 0) . '&target_drive_id=' . (int)($drives[0] ?? 0);
+}
+
 function mpv_link(array $params = []): string
 {
     $query = array_merge($_GET, $params);
@@ -36,7 +43,7 @@ function mpv_link(array $params = []): string
 function mpv_option_flags(array $options): string
 {
     $flags = [];
-    foreach (['use_category_targets' => 'Category targets', 'allow_spanning' => 'Spanning', 'include_accepted' => 'Accepted conflicts', 'include_uncategorised' => 'Uncategorised'] as $key => $label) {
+    foreach (['safe_candidates' => 'Safe candidates', 'paged_builder' => 'Paged builder', 'use_category_targets' => 'Category targets', 'allow_spanning' => 'Spanning', 'include_accepted' => 'Accepted conflicts', 'include_uncategorised' => 'Uncategorised'] as $key => $label) {
         if (!empty($options[$key])) {
             $flags[] = $label;
         }
@@ -260,8 +267,9 @@ $statusSummary = $statusStmt->fetchAll();
     <div class="button-row">
         <a class="button" href="move-plans.php">Saved Plans</a>
         <a class="button" href="move-planner.php">Move Planner</a>
+        <?php if ($plan['status'] === 'building'): ?><a class="button" href="<?= e(mpv_builder_url($plan)) ?>">Continue Build</a><?php endif; ?>
         <a class="button" href="move-plan-dry-runs.php?id=<?= e((string)$plan['id']) ?>">Dry-run Reports</a>
-        <?php if ($plan['status'] !== 'archived'): ?>
+        <?php if ($plan['status'] !== 'archived' && $plan['status'] !== 'building'): ?>
             <form method="post" style="display:inline" onsubmit="return confirm('Validate this saved plan snapshot? This updates saved item statuses only.');">
                 <input type="hidden" name="action" value="validate_plan">
                 <input type="hidden" name="id" value="<?= e((string)$plan['id']) ?>">
