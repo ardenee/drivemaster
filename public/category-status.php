@@ -27,6 +27,19 @@ function cs_link(array $params = []): string
     return 'category-status.php?' . http_build_query($query) . '#category-status-explorer';
 }
 
+function cs_category_badge(array $entry): string
+{
+    $name = trim((string)($entry['category_name'] ?? ''));
+    if ($name === '') {
+        return '<span class="muted">None</span>';
+    }
+    $colour = trim((string)($entry['category_color_hex'] ?? ''));
+    if (!preg_match('/^#[0-9a-fA-F]{6}$/', $colour)) {
+        $colour = '#d9e0e7';
+    }
+    return '<span class="category-badge"><span class="category-colour-chip" style="background:' . e($colour) . '"></span>' . e($name) . '</span>';
+}
+
 function cs_on_branch(string $folderPath, string $activePath): bool
 {
     $folderPath = trim($folderPath, '/');
@@ -165,19 +178,20 @@ render_header('Category Status');
         <?php endif; ?>
 
         <table class="explorer-table selectable-table" data-status-target="category-status-bar">
-            <thead><tr><?php foreach (['name' => 'Name', 'type' => 'Type', 'size' => 'Size', 'modified' => 'Modified'] as $key => $label): ?><th><a href="<?= e(cs_link(['sort' => $key, 'dir' => $sort === $key ? $nextDir : 'asc', 'page' => 1, 'mode' => $mode])) ?>"><?= e($label) ?><?= $sort === $key ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th><?php endforeach; ?></tr></thead>
+            <thead><tr><?php foreach (['name' => 'Name', 'type' => 'Type', 'category' => 'Category', 'size' => 'Size', 'modified' => 'Modified'] as $key => $label): ?><th><a href="<?= e(cs_link(['sort' => $key, 'dir' => $sort === $key ? $nextDir : 'asc', 'page' => 1, 'mode' => $mode])) ?>"><?= e($label) ?><?= $sort === $key ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th><?php endforeach; ?></tr></thead>
             <tbody>
-                <?php if ($currentPath !== ''): ?><tr class="explorer-row" data-url="<?= e(cs_link(['path' => cs_parent($currentPath), 'page' => 1, 'mode' => $mode])) ?>" data-status-path="<?= e(cs_parent($currentPath)) ?>" data-drive-id="<?= e((string)$driveId) ?>"><td>↩ ..</td><td>Folder</td><td></td><td></td></tr><?php endif; ?>
+                <?php if ($currentPath !== ''): ?><tr class="explorer-row" data-url="<?= e(cs_link(['path' => cs_parent($currentPath), 'page' => 1, 'mode' => $mode])) ?>" data-status-path="<?= e(cs_parent($currentPath)) ?>" data-drive-id="<?= e((string)$driveId) ?>"><td>↩ ..</td><td>Folder</td><td></td><td></td><td></td></tr><?php endif; ?>
                 <?php foreach ($children as $entry): ?>
                     <?php $entryUrl = $entry['entry_type'] === 'folder' ? cs_link(['drive_id' => $driveId, 'path' => $entry['relative_path'], 'selected_entry_id' => null, 'page' => 1, 'mode' => $mode]) : ''; ?>
                     <tr id="entry-<?= e((string)$entry['id']) ?>" class="search-result-row explorer-row selectable-row <?= $selectedEntryId === (int)$entry['id'] ? 'selected-row target-selected-row' : '' ?>" data-id="<?= e((string)$entry['id']) ?>" data-entry-type="<?= e((string)$entry['entry_type']) ?>" data-entry-name="<?= e((string)$entry['name']) ?>" data-url="<?= e($entryUrl) ?>" data-status-path="<?= e($entry['entry_type'] === 'folder' ? (string)$entry['relative_path'] : '') ?>" data-drive-id="<?= e((string)$driveId) ?>" data-size="<?= e((string)(int)$entry['size_bytes']) ?>" data-is-file="<?= $entry['entry_type'] === 'file' ? '1' : '0' ?>">
                         <td><?= $entry['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= e((string)$entry['name']) ?></td>
                         <td><?= e($entry['entry_type'] === 'folder' ? 'Folder' : strtoupper((string)$entry['extension']) . ' File') ?></td>
+                        <td><?= cs_category_badge($entry) ?></td>
                         <td><?= $entry['entry_type'] === 'file' ? e(format_bytes((int)$entry['size_bytes'])) : '' ?></td>
                         <td><?= e((string)$entry['modified_at']) ?></td>
                     </tr>
                 <?php endforeach; ?>
-                <?php if (!$children): ?><tr><td colspan="4">No <?= e(strtolower($modeLabel)) ?> entries in this folder.</td></tr><?php endif; ?>
+                <?php if (!$children): ?><tr><td colspan="5">No <?= e(strtolower($modeLabel)) ?> entries in this folder.</td></tr><?php endif; ?>
             </tbody>
         </table>
 
