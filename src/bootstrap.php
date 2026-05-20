@@ -77,3 +77,38 @@ function format_bytes(int|float|null $bytes): string
 
     return $index === 0 ? sprintf('%d %s', (int)$bytes, $units[$index]) : sprintf('%.2f %s', $bytes, $units[$index]);
 }
+
+function current_user(): ?array
+{
+    return DriveMaster\Support\Auth::currentUser(db());
+}
+
+function require_admin(): void
+{
+    DriveMaster\Support\Auth::requireAdmin(db());
+}
+
+function enforce_auth(): void
+{
+    if (PHP_SAPI === 'cli') {
+        return;
+    }
+    $script = basename((string)($_SERVER['SCRIPT_NAME'] ?? ''));
+    $openPages = ['login.php', 'logout.php', 'setup-admin.php', 'install.php'];
+    DriveMaster\Support\Auth::startSession();
+    DriveMaster\Support\Auth::ensureTable(db());
+    if (in_array($script, $openPages, true)) {
+        return;
+    }
+    if (DriveMaster\Support\Auth::userCount(db()) <= 0) {
+        header('Location: setup-admin.php');
+        exit;
+    }
+    if (!DriveMaster\Support\Auth::currentUser(db())) {
+        $next = (string)($_SERVER['REQUEST_URI'] ?? 'index.php');
+        header('Location: login.php?next=' . rawurlencode($next));
+        exit;
+    }
+}
+
+enforce_auth();
