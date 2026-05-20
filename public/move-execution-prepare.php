@@ -36,6 +36,14 @@ if ($validatedItems <= 0) {
     exit;
 }
 
+$existingStmt = db()->prepare("SELECT id FROM move_execution_runs WHERE move_plan_id = ? AND status IN ('draft', 'failed') ORDER BY id DESC LIMIT 1");
+$existingStmt->execute([$planId]);
+$existingRunId = (int)($existingStmt->fetchColumn() ?: 0);
+if ($existingRunId > 0) {
+    header('Location: move-execution-view.php?id=' . $existingRunId);
+    exit;
+}
+
 $db = db();
 $db->beginTransaction();
 try {
