@@ -17,20 +17,27 @@ final class CategoryWorkflowRepository
     {
     }
 
-    public function childFolders(int $driveId, string $parentPath, int $limit = self::TREE_CHILD_LIMIT): array
+    private function categoryFilterSql(string $mode, string $entryAlias = 'f'): string
+    {
+        return $mode === 'assigned'
+            ? ManualCategorySql::existsCondition($entryAlias)
+            : ManualCategorySql::unassignedCondition($entryAlias);
+    }
+
+    public function childFolders(int $driveId, string $parentPath, string $mode = 'unassigned', int $limit = self::TREE_CHILD_LIMIT): array
     {
         $visibleSql = IgnoredFolderSql::excludeCondition('f');
-        $unassignedSql = ManualCategorySql::unassignedCondition('f');
-        $stmt = $this->db->prepare("SELECT f.id, f.name, f.relative_path FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND f.entry_type = 'folder' AND {$visibleSql} AND {$unassignedSql} AND f.parent_path = ? ORDER BY f.name ASC LIMIT {$limit}");
+        $categorySql = $this->categoryFilterSql($mode, 'f');
+        $stmt = $this->db->prepare("SELECT f.id, f.name, f.relative_path FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND f.entry_type = 'folder' AND {$visibleSql} AND {$categorySql} AND f.parent_path = ? ORDER BY f.name ASC LIMIT {$limit}");
         $stmt->execute([$driveId, trim($parentPath, '/')]);
         return $stmt->fetchAll();
     }
 
-    public function folderSummary(int $driveId, string $parentPath): array
+    public function folderSummary(int $driveId, string $parentPath, string $mode = 'unassigned'): array
     {
         $visibleSql = IgnoredFolderSql::excludeCondition('f');
-        $unassignedSql = ManualCategorySql::unassignedCondition('f');
-        $stmt = $this->db->prepare("SELECT COUNT(*) AS total_items, SUM(f.entry_type = 'file') AS file_count, SUM(f.entry_type = 'folder') AS folder_count, COALESCE(SUM(CASE WHEN f.entry_type = 'file' THEN f.size_bytes ELSE 0 END), 0) AS total_size FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$unassignedSql} AND f.parent_path = ?");
+        $categorySql = $this->categoryFilterSql($mode, 'f');
+        $stmt = $this->db->prepare("SELECT COUNT(*) AS total_items, SUM(f.entry_type = 'file') AS file_count, SUM(f.entry_type = 'folder') AS folder_count, COALESCE(SUM(CASE WHEN f.entry_type = 'file' THEN f.size_bytes ELSE 0 END), 0) AS total_size FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$categorySql} AND f.parent_path = ?");
         $stmt->execute([$driveId, trim($parentPath, '/')]);
         $row = $stmt->fetch() ?: [];
         return [
@@ -41,7 +48,7 @@ final class CategoryWorkflowRepository
         ];
     }
 
-    public function folderChildren(int $driveId, string $parentPath, string $sort, string $dir, int $page, int $pageSize = self::PAGE_SIZE): array
+    public function folderChildren(int $driveId, string $parentPath, string $sort, string $dir, int $page, string $mode = 'unassigned', int $pageSize = self::PAGE_SIZE): array
     {
         $page = max(1, $page);
         $offset = ($page - 1) * $pageSize;
@@ -53,8 +60,8 @@ final class CategoryWorkflowRepository
             default => 'f.name',
         };
         $visibleSql = IgnoredFolderSql::excludeCondition('f');
-        $unassignedSql = ManualCategorySql::unassignedCondition('f');
-        $stmt = $this->db->prepare("SELECT f.id, f.drive_id, f.relative_path, f.name, f.entry_type, f.extension, f.size_bytes, f.modified_at FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$unassignedSql} AND f.parent_path = ? ORDER BY CASE WHEN f.entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, f.name ASC LIMIT ? OFFSET ?");
+        $categorySql = $this->categoryFilterSql($mode, 'f');
+        $stmt = $this->db->prepare("SELECT f.id, f.drive_id, f.relative_path, f.name, f.entry_type, f.extension, f.size_bytes, f.modified_at FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$categorySql} AND f.parent_path = ? ORDER BY CASE WHEN f.entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, f.name ASC LIMIT ? OFFSET ?");
         $stmt->bindValue(1, $driveId, PDO::PARAM_INT);
         $stmt->bindValue(2, trim($parentPath, '/'));
         $stmt->bindValue(3, $pageSize, PDO::PARAM_INT);
