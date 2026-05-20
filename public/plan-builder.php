@@ -33,10 +33,7 @@ try {
         if ($categoryId <= 0 || $targetDriveId <= 0) {
             throw new RuntimeException('Select one category and one target drive.');
         }
-
-        $targetCheck = db()->prepare('SELECT COUNT(*) FROM category_drive_targets cdt JOIN categories c ON c.id = cdt.category_id AND c.is_active = 1 JOIN drives d ON d.id = cdt.drive_id AND d.is_active = 1 WHERE cdt.is_enabled = 1 AND cdt.category_id = ? AND cdt.drive_id = ?');
-        $targetCheck->execute([$categoryId, $targetDriveId]);
-        if ((int)$targetCheck->fetchColumn() <= 0) {
+        if (!$repo->hasEnabledTarget($categoryId, $targetDriveId)) {
             throw new RuntimeException('That category is not enabled for the selected target drive. Configure it in Target Drives first.');
         }
 
@@ -72,7 +69,7 @@ try {
         $update = db()->prepare('UPDATE move_plans SET candidate_count = ?, total_size_bytes = ?, updated_at = NOW() WHERE id = ?');
         $update->execute([(int)$row['candidate_count'], (int)$row['total_size'], $planId]);
 
-        $remaining = $repo->count(['category_id' => $categoryId, 'target_drive_id' => $targetDriveId]) - (int)$row['candidate_count'];
+        $remaining = $repo->unsavedCount($planId, $categoryId, $targetDriveId);
         if ($remaining <= 0) {
             $complete = true;
             db()->prepare("UPDATE move_plans SET status = 'draft', updated_at = NOW() WHERE id = ?")->execute([$planId]);
