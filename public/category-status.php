@@ -133,7 +133,7 @@ render_header('Category Status');
     <div class="button-row">
         <a class="button <?= $mode === 'unassigned' ? 'selected-row' : '' ?>" href="<?= e(cs_link(['mode' => 'unassigned', 'page' => 1, 'selected_entry_id' => null])) ?>">Show uncategorised</a>
         <a class="button <?= $mode === 'assigned' ? 'selected-row' : '' ?>" href="<?= e(cs_link(['mode' => 'assigned', 'page' => 1, 'selected_entry_id' => null])) ?>">Show categorised</a>
-        <a class="button" href="category-workflow-summary.php">Status Summary</a>
+        <a class="button" href="category-status-summary.php">Status Summary</a>
         <a class="button" href="category-conflicts.php">Conflicts</a>
     </div>
     <div class="status-bar">Current view: <?= e($modeLabel) ?> items</div>
