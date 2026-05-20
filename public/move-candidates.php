@@ -5,7 +5,7 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 require __DIR__ . '/_layout.php';
 
-use DriveMaster\Support\MovePlanningSafety;
+use DriveMaster\Repository\MoveCandidateRepository;
 
 const MOVE_CANDIDATES_PAGE_SIZE = 990;
 
@@ -34,65 +34,19 @@ $offset = ($page - 1) * MOVE_CANDIDATES_PAGE_SIZE;
 $sort = (string)($_GET['sort'] ?? 'path');
 $dir = strtolower((string)($_GET['dir'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
 $nextDir = $dir === 'asc' ? 'desc' : 'asc';
+$filters = ['category_id' => $categoryId, 'target_drive_id' => $targetDriveId, 'current_drive_id' => $currentDriveId, 'search' => $search];
 
 $categories = db()->query('SELECT id, name, color_hex FROM categories WHERE is_active = 1 ORDER BY name')->fetchAll();
 $drives = db()->query('SELECT id, friendly_name, free_bytes, total_bytes FROM drives WHERE is_active = 1 ORDER BY friendly_name')->fetchAll();
-$effectiveSql = MovePlanningSafety::effectiveCategorySql();
-$activeConflictSql = MovePlanningSafety::activeConflictSql();
-$acceptedConflictSql = MovePlanningSafety::acceptedConflictSql();
-
-$where = ['f.is_missing = 0', "f.entry_type = 'file'", 'ec.category_count = 1', 'td.id IS NOT NULL', 'td.is_active = 1', 'ac.file_entry_id IS NULL', 'ic.file_entry_id IS NULL', 'f.drive_id <> td.id'];
-$params = [];
-if ($categoryId > 0) {
-    $where[] = 'ec.category_id = ?';
-    $params[] = $categoryId;
-}
-if ($targetDriveId > 0) {
-    $where[] = 'td.id = ?';
-    $params[] = $targetDriveId;
-}
-if ($currentDriveId > 0) {
-    $where[] = 'f.drive_id = ?';
-    $params[] = $currentDriveId;
-}
-if ($search !== '') {
-    $where[] = '(f.name LIKE ? OR f.relative_path LIKE ?)';
-    $params[] = '%' . $search . '%';
-    $params[] = '%' . $search . '%';
-}
-$whereSql = implode(' AND ', $where);
-$sortSql = match ($sort) {
-    'drive' => 'current_drive_name',
-    'name' => 'f.name',
-    'type' => 'f.entry_type',
-    'size' => 'f.size_bytes',
-    'modified' => 'f.modified_at',
-    default => 'f.relative_path',
-};
-
-$baseSql = "FROM ({$effectiveSql}) ec JOIN file_entries f ON f.id = ec.file_entry_id JOIN drives d ON d.id = f.drive_id JOIN category_drive_targets cdt ON cdt.category_id = ec.category_id AND cdt.is_enabled = 1 JOIN drives td ON td.id = cdt.drive_id LEFT JOIN ({$activeConflictSql}) ac ON ac.file_entry_id = f.id LEFT JOIN ({$acceptedConflictSql}) ic ON ic.file_entry_id = f.id WHERE {$whereSql}";
-
-$countStmt = db()->prepare("SELECT COUNT(*) {$baseSql}");
-$countStmt->execute($params);
-$total = (int)$countStmt->fetchColumn();
+$repo = new MoveCandidateRepository(db());
+$total = $repo->count($filters);
 $totalPages = max(1, (int)ceil($total / MOVE_CANDIDATES_PAGE_SIZE));
 if ($page > $totalPages) {
     $page = $totalPages;
     $offset = ($page - 1) * MOVE_CANDIDATES_PAGE_SIZE;
 }
-
-$summaryStmt = db()->prepare("SELECT COALESCE(SUM(f.size_bytes), 0) AS total_size, COUNT(*) AS file_count {$baseSql}");
-$summaryStmt->execute($params);
-$summary = $summaryStmt->fetch() ?: ['total_size' => 0, 'file_count' => 0];
-
-$stmt = db()->prepare("SELECT f.id, f.drive_id, f.relative_path, f.name, f.extension, f.entry_type, f.size_bytes, f.modified_at, d.friendly_name AS current_drive_name, td.id AS target_drive_id, td.friendly_name AS target_drive_name, ec.category_name, ec.color_hex, ec.is_manual, ec.is_rule {$baseSql} ORDER BY {$sortSql} {$dir}, f.relative_path ASC LIMIT ? OFFSET ?");
-foreach ($params as $index => $value) {
-    $stmt->bindValue($index + 1, $value);
-}
-$stmt->bindValue(count($params) + 1, MOVE_CANDIDATES_PAGE_SIZE, PDO::PARAM_INT);
-$stmt->bindValue(count($params) + 2, $offset, PDO::PARAM_INT);
-$stmt->execute();
-$candidates = $stmt->fetchAll();
+$summary = $repo->summary($filters);
+$candidates = $repo->page($filters, $sort, $dir, MOVE_CANDIDATES_PAGE_SIZE, $offset);
 
 $targetDriveName = '';
 foreach ($drives as $drive) {
