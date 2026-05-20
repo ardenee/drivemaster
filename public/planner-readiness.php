@@ -26,11 +26,11 @@ try {
 
     $checks[] = ['status' => $activeCategories > 0 ? 'OK' : 'Blocker', 'check' => 'Active categories', 'details' => number_format($activeCategories) . ' active categories.', 'action' => '<a class="button" href="categories.php">Categories</a>'];
     $checks[] = ['status' => $enabledTargets > 0 ? 'OK' : 'Blocker', 'check' => 'Target drives', 'details' => number_format($enabledTargets) . ' enabled target mappings.', 'action' => '<a class="button" href="category-targets.php">Targets</a>'];
-    $checks[] = ['status' => ($manualFiles + $manualFolders + $rules) > 0 ? 'OK' : 'Warning', 'check' => 'Assignment data', 'details' => number_format($manualFiles) . ' file assignments, ' . number_format($manualFolders) . ' folder assignments, ' . number_format($rules) . ' rules.', 'action' => '<a class="button" href="category-workflow-summary.php">Workflow Summary</a>'];
+    $checks[] = ['status' => ($manualFiles + $manualFolders + $rules) > 0 ? 'OK' : 'Warning', 'check' => 'Assignment data', 'details' => number_format($manualFiles) . ' file assignments, ' . number_format($manualFolders) . ' folder assignments, ' . number_format($rules) . ' rules.', 'action' => '<a class="button" href="category-status-summary.php">Status Summary</a>'];
     $checks[] = ['status' => $weakDrives > 0 ? 'Blocker' : 'OK', 'check' => 'Drive capacity data', 'details' => number_format($weakDrives) . ' active drives have zero/unknown total size.', 'action' => '<a class="button" href="drives.php">Drives</a>'];
 
     $rows[] = ['label' => 'Manual file assignments', 'count' => $manualFiles, 'handling' => 'Candidate drill-down applies exact safety rules'];
-    $rows[] = ['label' => 'Manual folder assignments', 'count' => $manualFolders, 'handling' => 'Workflow and candidate pages expand exact coverage'];
+    $rows[] = ['label' => 'Manual folder assignments', 'count' => $manualFolders, 'handling' => 'Status and candidate pages expand exact coverage'];
     $rows[] = ['label' => 'Enabled category rules', 'count' => $rules, 'handling' => 'Candidate drill-down applies exact matching'];
 } catch (Throwable $e) {
     $error = $e->getMessage();
