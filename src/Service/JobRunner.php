@@ -172,8 +172,13 @@ final class JobRunner
         $checked = 0;
         $bytes = 0;
         $sourceMissing = 0;
+        $sourceSizeMismatch = 0;
         $targetMountMissing = 0;
+        $targetParentMissing = 0;
+        $targetParentNotWritable = 0;
         $targetAlreadyExists = 0;
+        $tempTargetExists = 0;
+        $sameSourceTarget = 0;
         $sampleIssues = [];
         $lastUpdateAt = 0.0;
 
@@ -187,6 +192,9 @@ final class JobRunner
             if ($sourcePath === '' || !is_file($sourcePath)) {
                 $sourceMissing++;
                 $issues[] = 'source missing on disk';
+            } elseif (filesize($sourcePath) !== (int)$item['size_bytes']) {
+                $sourceSizeMismatch++;
+                $issues[] = 'source size changed';
             }
 
             $targetMount = rtrim((string)($item['target_mount_path'] ?? ''), "/\\");
@@ -196,13 +204,31 @@ final class JobRunner
             } else {
                 $relativePath = ltrim(str_replace('\\', '/', (string)$item['relative_path']), '/');
                 $targetPath = $targetMount . '/' . $relativePath;
+                $tempTargetPath = $targetPath . '.drivemaster-tmp-' . $jobId;
+                $targetParent = dirname($targetPath);
+
+                if ($sourcePath !== '' && strcasecmp($sourcePath, $targetPath) === 0) {
+                    $sameSourceTarget++;
+                    $issues[] = 'source and target path are identical';
+                }
                 if (file_exists($targetPath)) {
                     $targetAlreadyExists++;
                     $issues[] = 'target path already exists';
                 }
+                if (file_exists($tempTargetPath)) {
+                    $tempTargetExists++;
+                    $issues[] = 'temporary target path already exists';
+                }
+                if (!is_dir($targetParent)) {
+                    $targetParentMissing++;
+                    $issues[] = 'target parent folder does not exist';
+                } elseif (!is_writable($targetParent)) {
+                    $targetParentNotWritable++;
+                    $issues[] = 'target parent folder is not writable';
+                }
             }
 
-            if ($issues && count($sampleIssues) < 25) {
+            if ($issues && count($sampleIssues) < 50) {
                 $sampleIssues[] = [
                     'item_id' => (int)$item['id'],
                     'source_drive' => (string)$item['source_drive_name'],
@@ -219,15 +245,20 @@ final class JobRunner
             }
         }
 
-        $issueCount = $sourceMissing + $targetMountMissing + $targetAlreadyExists;
+        $issueCount = $sourceMissing + $sourceSizeMismatch + $targetMountMissing + $targetParentMissing + $targetParentNotWritable + $targetAlreadyExists + $tempTargetExists + $sameSourceTarget;
         $this->jobs->complete($jobId, [
             'move_plan_id' => $planId,
             'items_checked' => $checked,
             'bytes_checked' => $bytes,
             'dry_run_only' => true,
             'source_missing' => $sourceMissing,
+            'source_size_mismatch' => $sourceSizeMismatch,
             'target_mount_missing' => $targetMountMissing,
+            'target_parent_missing' => $targetParentMissing,
+            'target_parent_not_writable' => $targetParentNotWritable,
             'target_already_exists' => $targetAlreadyExists,
+            'temp_target_exists' => $tempTargetExists,
+            'same_source_target' => $sameSourceTarget,
             'issue_count' => $issueCount,
             'sample_issues' => $sampleIssues,
             'progress_current' => $checked,
