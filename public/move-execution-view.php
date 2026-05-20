@@ -145,10 +145,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $id = $postId;
         }
     }
+    if ($action === 'cancel_run' && $postId > 0) {
+        db()->prepare("UPDATE move_execution_runs SET status = 'cancelled', error_message = 'Cancelled by user before execution.', updated_at = NOW() WHERE id = ? AND status IN ('draft', 'failed')")->execute([$postId]);
+        db()->prepare("UPDATE move_execution_items SET status = 'cancelled', error_message = 'Execution run cancelled.', updated_at = NOW() WHERE execution_run_id = ? AND status IN ('pending', 'failed')")->execute([$postId]);
+        header('Location: move-execution-view.php?id=' . $postId . '&cancelled=1');
+        exit;
+    }
+    if ($action === 'delete_run' && $postId > 0) {
+        db()->prepare("DELETE FROM move_execution_runs WHERE id = ? AND status IN ('draft', 'failed', 'cancelled')")->execute([$postId]);
+        header('Location: move-executions.php');
+        exit;
+    }
 }
 
 if (isset($_GET['checked'])) {
     $message = 'Final safety check complete. Checked: ' . number_format((int)($_GET['total'] ?? 0)) . ' | Passed: ' . number_format((int)($_GET['passed'] ?? 0)) . ' | Failed: ' . number_format((int)($_GET['failed'] ?? 0));
+}
+if (isset($_GET['cancelled'])) {
+    $message = 'Execution run cancelled. No files were moved.';
 }
 
 $run = null;
@@ -164,7 +178,7 @@ render_header('Move Execution View');
 <div class="card">
     <h2>Execution run not found</h2>
     <p>The requested execution preparation run could not be found.</p>
-    <div class="button-row"><a class="button" href="move-plans.php">Saved Plans</a></div>
+    <div class="button-row"><a class="button" href="move-executions.php">Execution Runs</a> <a class="button" href="move-plans.php">Saved Plans</a></div>
 </div>
 <?php render_footer(); return; ?>
 <?php endif; ?>
@@ -196,6 +210,11 @@ $items = $itemStmt->fetchAll();
 $statusStmt = db()->prepare('SELECT status, COUNT(*) AS item_count, COALESCE(SUM(size_bytes), 0) AS total_size FROM move_execution_items WHERE execution_run_id = ? GROUP BY status ORDER BY status');
 $statusStmt->execute([$id]);
 $statusSummary = $statusStmt->fetchAll();
+
+$latestDryRunStmt = db()->prepare("SELECT id, status, result_json, error_message, finished_at FROM jobs WHERE job_type = 'move_plan_dry_run' AND CAST(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.move_plan_id')) AS UNSIGNED) = ? ORDER BY id DESC LIMIT 1");
+$latestDryRunStmt->execute([(int)$run['move_plan_id']]);
+$latestDryRun = $latestDryRunStmt->fetch() ?: null;
+$latestDryRunResult = $latestDryRun ? mev_json($latestDryRun['result_json'] ?? null) : [];
 ?>
 
 <?php if ($message): ?><div class="card"><strong><?= e($message) ?></strong></div><?php endif; ?>
@@ -205,18 +224,26 @@ $statusSummary = $statusStmt->fetchAll();
     <h2>Move execution preparation #<?= e((string)$run['id']) ?></h2>
     <p class="muted">Prepared execution audit records only. This page does not queue jobs and does not move files.</p>
     <div class="status-bar">Run status: <?= e($run['status']) ?> | Plan: #<?= e((string)$run['move_plan_id']) ?> | Plan status: <?= e($run['plan_status']) ?> | Items: <?= e(number_format($total)) ?> | Created: <?= e($run['created_at']) ?></div>
-    <div class="status-bar">Dry-run required: <?= (int)$run['dry_run_required'] === 1 ? 'Yes' : 'No' ?> | Started: <?= e($run['started_at'] ?? '') ?> | Finished: <?= e($run['finished_at'] ?? '') ?></div>
+    <div class="status-bar">Dry-run required: <?= (int)$run['dry_run_required'] === 1 ? 'Yes' : 'No' ?> | Latest dry-run: <?= $latestDryRun ? e('#' . (string)$latestDryRun['id'] . ' ' . (string)$latestDryRun['status']) : 'None' ?><?= $latestDryRunResult ? ' | Issues: ' . e(number_format((int)($latestDryRunResult['issue_count'] ?? 0))) : '' ?></div>
     <?php if ($run['error_message']): ?><p><strong>Error:</strong> <?= e($run['error_message']) ?></p><?php endif; ?>
+    <?php if ((int)$run['dry_run_required'] === 1 && (!$latestDryRun || (string)$latestDryRun['status'] !== 'complete')): ?><p class="muted">Complete a dry-run before final safety check can pass.</p><?php endif; ?>
     <div class="button-row">
+        <a class="button" href="move-executions.php">Execution Runs</a>
         <a class="button" href="move-plan-view.php?id=<?= e((string)$run['move_plan_id']) ?>">Plan View</a>
         <a class="button" href="move-plan-dry-runs.php?id=<?= e((string)$run['move_plan_id']) ?>">Dry-run Reports</a>
         <a class="button" href="move-plans.php">Saved Plans</a>
         <?php if (in_array((string)$run['status'], ['draft', 'failed'], true)): ?>
             <form method="post" style="display:inline" onsubmit="return confirm('Run final safety check? This updates execution item statuses only and does not move files.');">
-                <input type="hidden" name="action" value="final_safety_check">
-                <input type="hidden" name="id" value="<?= e((string)$run['id']) ?>">
-                <button type="submit">Final safety check</button>
+                <input type="hidden" name="action" value="final_safety_check"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button type="submit">Final safety check</button>
             </form>
+            <form method="post" style="display:inline" onsubmit="return confirm('Cancel this execution run? No files will be moved.');">
+                <input type="hidden" name="action" value="cancel_run"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button type="submit">Cancel run</button>
+            </form>
+            <form method="post" style="display:inline" onsubmit="return confirm('Delete this execution audit record?');">
+                <input type="hidden" name="action" value="delete_run"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button class="danger" type="submit">Delete run</button>
+            </form>
+        <?php elseif ((string)$run['status'] === 'cancelled'): ?>
+            <form method="post" style="display:inline" onsubmit="return confirm('Delete this cancelled execution audit record?');"><input type="hidden" name="action" value="delete_run"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button class="danger" type="submit">Delete run</button></form>
         <?php endif; ?>
     </div>
 </div>
@@ -250,20 +277,13 @@ $statusSummary = $statusStmt->fetchAll();
             <tbody>
             <?php foreach ($items as $item): ?>
                 <tr class="selectable-row">
-                    <td><?= e($item['status']) ?></td>
-                    <td class="wrap-cell path-cell"><?= e($item['source_path']) ?></td>
-                    <td class="wrap-cell path-cell"><?= e($item['target_path']) ?></td>
-                    <td><?= e(format_bytes((int)$item['size_bytes'])) ?></td>
-                    <td class="wrap-cell path-cell"><?= e($item['temp_target_path'] ?? '') ?></td>
-                    <td class="wrap-cell"><?= e($item['error_message'] ?? '') ?></td>
+                    <td><?= e($item['status']) ?></td><td class="wrap-cell path-cell"><?= e($item['source_path']) ?></td><td class="wrap-cell path-cell"><?= e($item['target_path']) ?></td><td><?= e(format_bytes((int)$item['size_bytes'])) ?></td><td class="wrap-cell path-cell"><?= e($item['temp_target_path'] ?? '') ?></td><td class="wrap-cell"><?= e($item['error_message'] ?? '') ?></td>
                 </tr>
             <?php endforeach; ?>
             <?php if (!$items): ?><tr><td colspan="6">No execution items found.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>
-    <?php if ($total > MOVE_EXECUTION_VIEW_PAGE_SIZE): ?>
-        <div class="status-bar">Page <?= e(number_format($page)) ?> of <?= e(number_format($totalPages)) ?>. <a class="button" href="<?= e(mev_link(['page' => max(1, $page - 1)])) ?>">Previous</a> <a class="button" href="<?= e(mev_link(['page' => min($totalPages, $page + 1)])) ?>">Next</a></div>
-    <?php endif; ?>
+    <?php if ($total > MOVE_EXECUTION_VIEW_PAGE_SIZE): ?><div class="status-bar">Page <?= e(number_format($page)) ?> of <?= e(number_format($totalPages)) ?>. <a class="button" href="<?= e(mev_link(['page' => max(1, $page - 1)])) ?>">Previous</a> <a class="button" href="<?= e(mev_link(['page' => min($totalPages, $page + 1)])) ?>">Next</a></div><?php endif; ?>
 </div>
 <?php render_footer(); ?>
