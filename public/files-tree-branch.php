@@ -7,11 +7,6 @@ require dirname(__DIR__) . '/src/bootstrap.php';
 use DriveMaster\Support\CategoryMatchSql;
 use DriveMaster\Support\IgnoredFolderSql;
 
-function ftb_parent_expr(): string
-{
-    return "CASE WHEN LOCATE('/', relative_path) = 0 THEN '' ELSE SUBSTRING(relative_path, 1, LENGTH(relative_path) - LENGTH(SUBSTRING_INDEX(relative_path, '/', -1)) - 1) END";
-}
-
 function ftb_link(array $params = []): string
 {
     return 'files.php?' . http_build_query($params) . '#explorer-panel';
@@ -51,9 +46,8 @@ function ftb_category_map(array $ids): array
 
 function ftb_children(int $driveId, string $parentPath): array
 {
-    $expr = ftb_parent_expr();
     $visibleSql = IgnoredFolderSql::excludeCondition('f');
-    $stmt = db()->prepare("SELECT id, name, relative_path FROM file_entries f WHERE drive_id = ? AND is_missing = 0 AND entry_type = 'folder' AND {$visibleSql} AND {$expr} = ? ORDER BY name ASC LIMIT 1000");
+    $stmt = db()->prepare("SELECT id, name, relative_path FROM file_entries f WHERE drive_id = ? AND is_missing = 0 AND entry_type = 'folder' AND {$visibleSql} AND parent_path = ? ORDER BY name ASC LIMIT 1000");
     $stmt->execute([$driveId, $parentPath]);
     return $stmt->fetchAll();
 }
