@@ -5,6 +5,8 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 require __DIR__ . '/_layout.php';
 
+use DriveMaster\Support\ExecutionSettings;
+
 const MOVE_EXECUTION_VIEW_PAGE_SIZE = 990;
 
 function mev_link(array $params = []): string
@@ -35,20 +37,18 @@ function mev_final_safety_check(int $runId): array
 {
     $db = db();
     $summary = ['checked' => 0, 'passed' => 0, 'failed' => 0];
-
     $runStmt = $db->prepare('SELECT mer.*, mp.status AS plan_status FROM move_execution_runs mer JOIN move_plans mp ON mp.id = mer.move_plan_id WHERE mer.id = ?');
     $runStmt->execute([$runId]);
     $run = $runStmt->fetch();
     if (!$run) {
         throw new RuntimeException('Execution run not found.');
     }
-    if ((string)$run['status'] !== 'draft' && (string)$run['status'] !== 'failed') {
+    if (!in_array((string)$run['status'], ['draft', 'failed'], true)) {
         throw new RuntimeException('Only draft or failed execution runs can be safety checked.');
     }
     if ((string)$run['plan_status'] !== 'validated') {
         throw new RuntimeException('The parent plan must be validated before execution safety checks.');
     }
-
     if ((int)$run['dry_run_required'] === 1) {
         $dryRunStmt = $db->prepare("SELECT result_json FROM jobs WHERE job_type = 'move_plan_dry_run' AND status = 'complete' AND CAST(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.move_plan_id')) AS UNSIGNED) = ? ORDER BY id DESC LIMIT 1");
         $dryRunStmt->execute([(int)$run['move_plan_id']]);
@@ -77,7 +77,6 @@ function mev_final_safety_check(int $runId): array
         $tempTargetPath = (string)($item['temp_target_path'] ?? '');
         $targetDir = dirname($targetPath);
         $tempTargetDir = $tempTargetPath !== '' ? dirname($tempTargetPath) : $targetDir;
-
         if ($sourcePath === '' || !is_file($sourcePath)) {
             $reasons[] = 'Source file is not currently visible on disk.';
         } elseif (filesize($sourcePath) !== (int)$item['size_bytes']) {
@@ -101,7 +100,6 @@ function mev_final_safety_check(int $runId): array
         if ($tempTargetDir === '' || !is_dir($tempTargetDir)) {
             $reasons[] = 'Temporary target directory does not currently exist.';
         }
-
         $reasons = array_values(array_unique($reasons));
         if ($reasons) {
             $summary['failed']++;
@@ -111,11 +109,9 @@ function mev_final_safety_check(int $runId): array
             $updateItem->execute(['pending', null, (int)$item['id']]);
         }
     }
-
     $runStatus = $summary['failed'] > 0 ? 'failed' : 'draft';
     $errorMessage = $summary['failed'] > 0 ? 'Final safety check failed for ' . $summary['failed'] . ' item(s).' : null;
-    $runUpdate = $db->prepare('UPDATE move_execution_runs SET status = ?, error_message = ?, updated_at = NOW() WHERE id = ?');
-    $runUpdate->execute([$runStatus, $errorMessage, $runId]);
+    db()->prepare('UPDATE move_execution_runs SET status = ?, error_message = ?, updated_at = NOW() WHERE id = ?')->execute([$runStatus, $errorMessage, $runId]);
     return $summary;
 }
 
@@ -141,14 +137,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $id = $postId;
         }
     }
+    if ($action === 'reset_to_draft' && $postId > 0) {
+        db()->prepare("UPDATE move_execution_runs SET status = 'draft', started_at = NULL, finished_at = NULL, error_message = NULL, updated_at = NOW() WHERE id = ? AND status IN ('failed','simulated','cancelled')")->execute([$postId]);
+        db()->prepare("UPDATE move_execution_items SET status = 'pending', error_message = NULL, updated_at = NOW() WHERE execution_run_id = ? AND status IN ('failed','simulated','cancelled')")->execute([$postId]);
+        header('Location: move-execution-view.php?id=' . $postId . '&reset=1');
+        exit;
+    }
     if ($action === 'cancel_run' && $postId > 0) {
-        db()->prepare("UPDATE move_execution_runs SET status = 'cancelled', error_message = 'Cancelled by user before execution.', updated_at = NOW() WHERE id = ? AND status IN ('draft', 'failed')")->execute([$postId]);
-        db()->prepare("UPDATE move_execution_items SET status = 'cancelled', error_message = 'Execution run cancelled.', updated_at = NOW() WHERE execution_run_id = ? AND status IN ('pending', 'failed')")->execute([$postId]);
+        db()->prepare("UPDATE move_execution_runs SET status = 'cancelled', error_message = 'Cancelled by user before execution.', updated_at = NOW() WHERE id = ? AND status IN ('draft', 'failed', 'simulated')")->execute([$postId]);
+        db()->prepare("UPDATE move_execution_items SET status = 'cancelled', error_message = 'Execution run cancelled.', updated_at = NOW() WHERE execution_run_id = ? AND status IN ('pending', 'failed', 'simulated')")->execute([$postId]);
         header('Location: move-execution-view.php?id=' . $postId . '&cancelled=1');
         exit;
     }
     if ($action === 'delete_run' && $postId > 0) {
-        db()->prepare("DELETE FROM move_execution_runs WHERE id = ? AND status IN ('draft', 'failed', 'cancelled')")->execute([$postId]);
+        db()->prepare("DELETE FROM move_execution_runs WHERE id = ? AND status IN ('draft', 'failed', 'cancelled', 'simulated')")->execute([$postId]);
         header('Location: move-executions.php');
         exit;
     }
@@ -162,6 +164,12 @@ if (isset($_GET['cancelled'])) {
 }
 if (isset($_GET['simulated'])) {
     $message = 'Simulated execution complete. Items marked simulated: ' . number_format((int)$_GET['simulated']) . '. No files were moved.';
+}
+if (isset($_GET['reset'])) {
+    $message = 'Execution run reset to draft/pending state.';
+}
+if (isset($_GET['moved'])) {
+    $message = 'Actual execution complete. Moved: ' . number_format((int)$_GET['moved']) . ' | Failed: ' . number_format((int)($_GET['move_failed'] ?? 0));
 }
 $executionError = (string)($_GET['execution_error'] ?? '');
 
@@ -203,18 +211,22 @@ $items = $itemStmt->fetchAll();
 $statusStmt = db()->prepare('SELECT status, COUNT(*) AS item_count, COALESCE(SUM(size_bytes), 0) AS total_size FROM move_execution_items WHERE execution_run_id = ? GROUP BY status ORDER BY status');
 $statusStmt->execute([$id]);
 $statusSummary = $statusStmt->fetchAll();
-$pending = 0; $failed = 0; $cancelled = 0;
+$pending = 0; $failed = 0; $cancelled = 0; $simulated = 0;
 foreach ($statusSummary as $row) {
     if ($row['status'] === 'pending') { $pending = (int)$row['item_count']; }
     if ($row['status'] === 'failed') { $failed = (int)$row['item_count']; }
     if ($row['status'] === 'cancelled') { $cancelled = (int)$row['item_count']; }
+    if ($row['status'] === 'simulated') { $simulated = (int)$row['item_count']; }
 }
 $latestDryRunStmt = db()->prepare("SELECT id, status, result_json, error_message, finished_at FROM jobs WHERE job_type = 'move_plan_dry_run' AND CAST(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.move_plan_id')) AS UNSIGNED) = ? ORDER BY id DESC LIMIT 1");
 $latestDryRunStmt->execute([(int)$run['move_plan_id']]);
 $latestDryRun = $latestDryRunStmt->fetch() ?: null;
 $latestDryRunResult = $latestDryRun ? mev_json($latestDryRun['result_json'] ?? null) : [];
 $dryRunOk = $latestDryRun && (string)$latestDryRun['status'] === 'complete' && (int)($latestDryRunResult['issue_count'] ?? 0) === 0;
-$canSimulate = (string)$run['status'] === 'draft' && $pending > 0 && $failed === 0 && $cancelled === 0 && $dryRunOk;
+$settings = ExecutionSettings::all(db());
+$actualMovesEnabled = ExecutionSettings::actualMovesEnabled($settings);
+$canExecute = (string)$run['status'] === 'draft' && $pending > 0 && $failed === 0 && $cancelled === 0 && $dryRunOk;
+$phrase = (string)($settings['execution_confirmation_phrase'] ?? 'I understand this will move files');
 ?>
 
 <?php if ($message): ?><div class="card"><strong><?= e($message) ?></strong></div><?php endif; ?>
@@ -223,25 +235,37 @@ $canSimulate = (string)$run['status'] === 'draft' && $pending > 0 && $failed ===
 
 <div class="card">
     <h2>Move execution preparation #<?= e((string)$run['id']) ?></h2>
-    <p class="muted">Prepared execution audit records only. Simulation marks database audit rows only; it does not move files.</p>
+    <p class="muted">Simulation marks database audit rows only. Actual move mode is available only when enabled in Execution Settings and confirmed here.</p>
     <div class="status-bar">Run status: <?= e($run['status']) ?> | Plan: #<?= e((string)$run['move_plan_id']) ?> | Plan status: <?= e($run['plan_status']) ?> | Items: <?= e(number_format($total)) ?> | Created: <?= e($run['created_at']) ?></div>
-    <div class="status-bar">Dry-run required: <?= (int)$run['dry_run_required'] === 1 ? 'Yes' : 'No' ?> | Latest dry-run: <?= $latestDryRun ? e('#' . (string)$latestDryRun['id'] . ' ' . (string)$latestDryRun['status']) : 'None' ?><?= $latestDryRunResult ? ' | Issues: ' . e(number_format((int)($latestDryRunResult['issue_count'] ?? 0))) : '' ?> | Pending: <?= e(number_format($pending)) ?> | Failed: <?= e(number_format($failed)) ?></div>
+    <div class="status-bar">Dry-run: <?= $dryRunOk ? 'Complete with zero issues' : 'Not clean/complete' ?> | Pending: <?= e(number_format($pending)) ?> | Failed: <?= e(number_format($failed)) ?> | Simulated: <?= e(number_format($simulated)) ?> | Actual moves: <?= $actualMovesEnabled ? 'Enabled' : 'Disabled' ?></div>
     <?php if ($run['error_message']): ?><p><strong>Error:</strong> <?= e($run['error_message']) ?></p><?php endif; ?>
-    <?php if ((int)$run['dry_run_required'] === 1 && !$dryRunOk): ?><p class="muted">A completed dry-run with zero issues is required before simulation.</p><?php endif; ?>
     <div class="button-row">
         <a class="button" href="move-executions.php">Execution Runs</a>
         <a class="button" href="move-plan-view.php?id=<?= e((string)$run['move_plan_id']) ?>">Plan View</a>
         <a class="button" href="move-plan-dry-runs.php?id=<?= e((string)$run['move_plan_id']) ?>">Dry-run Reports</a>
         <a class="button" href="move-execution-settings.php">Execution Settings</a>
-        <a class="button" href="move-plans.php">Saved Plans</a>
         <?php if (in_array((string)$run['status'], ['draft', 'failed'], true)): ?>
             <form method="post" style="display:inline" onsubmit="return confirm('Run final safety check? This updates execution item statuses only and does not move files.');"><input type="hidden" name="action" value="final_safety_check"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button type="submit">Final safety check</button></form>
-            <?php if ($canSimulate): ?><form method="post" action="move-execution-queue.php" style="display:inline" onsubmit="return confirm('Simulate this execution run? This marks audit rows only and does not move files.');"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><input type="hidden" name="mode" value="simulate"><button type="submit">Queue simulated execution</button></form><?php endif; ?>
+            <?php if ($canExecute): ?><form method="post" action="move-execution-queue.php" style="display:inline" onsubmit="return confirm('Simulate this execution run? This marks audit rows only and does not move files.');"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><input type="hidden" name="mode" value="simulate"><button type="submit">Simulate</button></form><?php endif; ?>
             <form method="post" style="display:inline" onsubmit="return confirm('Cancel this execution run? No files will be moved.');"><input type="hidden" name="action" value="cancel_run"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button type="submit">Cancel run</button></form>
-            <form method="post" style="display:inline" onsubmit="return confirm('Delete this execution audit record?');"><input type="hidden" name="action" value="delete_run"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button class="danger" type="submit">Delete run</button></form>
-        <?php elseif ((string)$run['status'] === 'cancelled'): ?><form method="post" style="display:inline" onsubmit="return confirm('Delete this cancelled execution audit record?');"><input type="hidden" name="action" value="delete_run"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button class="danger" type="submit">Delete run</button></form><?php endif; ?>
+        <?php endif; ?>
+        <?php if (in_array((string)$run['status'], ['failed', 'simulated', 'cancelled'], true)): ?><form method="post" style="display:inline" onsubmit="return confirm('Reset this run to draft/pending?');"><input type="hidden" name="action" value="reset_to_draft"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button type="submit">Reset to draft</button></form><?php endif; ?>
+        <?php if (in_array((string)$run['status'], ['draft', 'failed', 'cancelled', 'simulated'], true)): ?><form method="post" style="display:inline" onsubmit="return confirm('Delete this execution audit record?');"><input type="hidden" name="action" value="delete_run"><input type="hidden" name="id" value="<?= e((string)$run['id']) ?>"><button class="danger" type="submit">Delete run</button></form><?php endif; ?>
     </div>
 </div>
+
+<?php if ($actualMovesEnabled && $canExecute): ?>
+<div class="card">
+    <h2>Actual move execution</h2>
+    <p><strong>Warning:</strong> this will copy each source file to a temporary target path, verify the target size, rename it to the final target path, verify again, then remove the source. Failed items are marked failed and source removal is not attempted unless the target has verified.</p>
+    <form method="post" action="move-execution-queue.php" onsubmit="return confirm('Actually move these files now?');">
+        <input type="hidden" name="id" value="<?= e((string)$run['id']) ?>">
+        <input type="hidden" name="mode" value="actual">
+        <label>Type confirmation phrase: <input type="text" name="confirmation_phrase" style="width:100%;max-width:520px" placeholder="<?= e($phrase) ?>"></label>
+        <p><button class="danger" type="submit">Run actual move execution</button></p>
+    </form>
+</div>
+<?php endif; ?>
 
 <div class="card"><h2>Execution item status summary</h2><div class="table-scroll"><table class="auto-table compact-table"><thead><tr><th>Status</th><th>Items</th><th>Total size</th></tr></thead><tbody><?php foreach ($statusSummary as $row): ?><tr><td><?= e($row['status']) ?></td><td><?= e(number_format((int)$row['item_count'])) ?></td><td><?= e(format_bytes((int)$row['total_size'])) ?></td></tr><?php endforeach; ?><?php if (!$statusSummary): ?><tr><td colspan="3">No execution items found.</td></tr><?php endif; ?></tbody></table></div></div>
 <div class="card"><h2>Prepared execution items</h2><p class="muted">Showing <?= e(number_format($total === 0 ? 0 : $offset + 1)) ?>-<?= e(number_format(min($offset + count($items), $total))) ?> of <?= e(number_format($total)) ?> prepared items.</p><div class="table-scroll"><table class="auto-table compact-table selectable-table"><thead><tr><?php foreach (['status' => 'Status', 'source' => 'Source path', 'target' => 'Target path', 'size' => 'Size'] as $key => $label): ?><th><a href="<?= e(mev_link(['sort' => $key, 'dir' => $sort === $key ? $nextDir : 'asc', 'page' => 1])) ?>"><?= e($label) ?><?= $sort === $key ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th><?php endforeach; ?><th>Temp target</th><th>Error</th></tr></thead><tbody><?php foreach ($items as $item): ?><tr class="selectable-row"><td><?= e($item['status']) ?></td><td class="wrap-cell path-cell"><?= e($item['source_path']) ?></td><td class="wrap-cell path-cell"><?= e($item['target_path']) ?></td><td><?= e(format_bytes((int)$item['size_bytes'])) ?></td><td class="wrap-cell path-cell"><?= e($item['temp_target_path'] ?? '') ?></td><td class="wrap-cell"><?= e($item['error_message'] ?? '') ?></td></tr><?php endforeach; ?><?php if (!$items): ?><tr><td colspan="6">No execution items found.</td></tr><?php endif; ?></tbody></table></div><?php if ($total > MOVE_EXECUTION_VIEW_PAGE_SIZE): ?><div class="status-bar">Page <?= e(number_format($page)) ?> of <?= e(number_format($totalPages)) ?>. <a class="button" href="<?= e(mev_link(['page' => max(1, $page - 1)])) ?>">Previous</a> <a class="button" href="<?= e(mev_link(['page' => min($totalPages, $page + 1)])) ?>">Next</a></div><?php endif; ?></div>
