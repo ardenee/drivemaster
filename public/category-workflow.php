@@ -7,7 +7,7 @@ require __DIR__ . '/_layout.php';
 
 use DriveMaster\Support\IgnoredFolderSql;
 
-const CATEGORY_WORKFLOW_LIMIT_MAX = 1000;
+const CATEGORY_WORKFLOW_PAGE_SIZE = 495;
 
 function cw_parent(string $path): string
 {
@@ -18,68 +18,63 @@ function cw_parent(string $path): string
     return substr($path, 0, strrpos($path, '/')) ?: '';
 }
 
+function cw_link(array $params = []): string
+{
+    $query = array_merge($_GET, $params);
+    foreach ($query as $key => $value) {
+        if ($value === null) {
+            unset($query[$key]);
+        }
+    }
+    return 'category-workflow.php?' . http_build_query($query) . '#workflow-explorer';
+}
+
 function cw_manual_match_sql(string $alias = 'f'): string
 {
     return "EXISTS (SELECT 1 FROM category_manual_assignments cma WHERE cma.file_entry_id = {$alias}.id OR (cma.assignment_type = 'folder' AND cma.drive_id = {$alias}.drive_id AND cma.path_prefix IS NOT NULL AND ({$alias}.relative_path = cma.path_prefix OR {$alias}.relative_path LIKE CONCAT(cma.path_prefix, '/%'))))";
 }
 
-function cw_badges(array $map, int $entryId): string
+function cw_tree_children(int $driveId, string $parentPath): array
 {
-    if (empty($map[$entryId])) {
-        return '<span class="muted">No manual category</span>';
-    }
-
-    $out = '';
-    foreach ($map[$entryId] as $row) {
-        $style = '';
-        $hex = (string)($row['color_hex'] ?? '');
-        if (preg_match('/^#[0-9a-fA-F]{6}$/', $hex)) {
-            $r = hexdec(substr($hex, 1, 2));
-            $g = hexdec(substr($hex, 3, 2));
-            $b = hexdec(substr($hex, 5, 2));
-            $style = ' style="background-color: rgba(' . $r . ',' . $g . ',' . $b . ',0.55); border-color: rgba(' . $r . ',' . $g . ',' . $b . ',0.85);"';
-        }
-        $out .= '<span class="category-badge" title="manual"' . $style . '>' . e((string)$row['category_name']) . '</span> ';
-    }
-    return trim($out);
+    $visibleSql = IgnoredFolderSql::excludeCondition('f');
+    $unassignedSql = 'NOT ' . cw_manual_match_sql('f');
+    $stmt = db()->prepare("SELECT f.id, f.name, f.relative_path FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND f.entry_type = 'folder' AND {$visibleSql} AND {$unassignedSql} AND f.parent_path = ? ORDER BY f.name ASC LIMIT 1000");
+    $stmt->execute([$driveId, $parentPath]);
+    return $stmt->fetchAll();
 }
 
-function cw_load_manual_badges(array $entryIds): array
+function cw_on_branch(string $folderPath, string $activePath): bool
 {
-    $entryIds = array_values(array_unique(array_filter(array_map('intval', $entryIds), static fn(int $id): bool => $id > 0)));
-    if (!$entryIds) {
-        return [];
-    }
+    $folderPath = trim($folderPath, '/');
+    $activePath = trim($activePath, '/');
+    return $folderPath !== '' && ($folderPath === $activePath || str_starts_with($activePath, $folderPath . '/'));
+}
 
-    $placeholders = implode(',', array_fill(0, count($entryIds), '?'));
-    $visibleSql = IgnoredFolderSql::excludeCondition('f');
-    $sql = "
-        SELECT f.id AS file_entry_id, c.name AS category_name, c.color_hex
-        FROM file_entries f
-        JOIN category_manual_assignments cma ON cma.category_id IS NOT NULL
-        JOIN categories c ON c.id = cma.category_id AND c.is_active = 1
-        WHERE f.id IN ({$placeholders})
-        AND {$visibleSql}
-        AND (cma.file_entry_id = f.id OR (cma.assignment_type = 'folder' AND cma.drive_id = f.drive_id AND cma.path_prefix IS NOT NULL AND (f.relative_path = cma.path_prefix OR f.relative_path LIKE CONCAT(cma.path_prefix, '/%'))))
-        ORDER BY c.name
-    ";
-    $stmt = db()->prepare($sql);
-    $stmt->execute($entryIds);
-
-    $map = [];
-    foreach ($stmt->fetchAll() as $row) {
-        $map[(int)$row['file_entry_id']][] = $row;
+function cw_render_tree(int $driveId, string $parentPath, string $activePath, int $level = 0): void
+{
+    foreach (cw_tree_children($driveId, $parentPath) as $folder) {
+        $folderPath = (string)$folder['relative_path'];
+        $isOpen = cw_on_branch($folderPath, $activePath);
+        $isActive = $folderPath === $activePath;
+        $padding = 18 + ($level * 18);
+        ?>
+        <div class="tree-folder selectable-row <?= $isActive ? 'selected selected-row' : '' ?>" style="padding-left: <?= e((string)$padding) ?>px" data-id="<?= e((string)$folder['id']) ?>" data-entry-type="folder" data-entry-name="<?= e((string)$folder['name']) ?>" data-size="0" data-is-file="0" data-drive-id="<?= e((string)$driveId) ?>" data-path="<?= e($folderPath) ?>" data-level="<?= e((string)$level) ?>" data-url="<?= e(cw_link(['drive_id' => $driveId, 'path' => $folderPath, 'selected_entry_id' => null, 'page' => 1])) ?>">
+            <span class="tree-toggle"><?= $isOpen ? '▾' : '▸' ?></span><span class="folder-icon">📁</span> <?= e((string)$folder['name']) ?>
+        </div>
+        <?php
+        if ($isOpen) {
+            cw_render_tree($driveId, $folderPath, $activePath, $level + 1);
+        }
     }
-    return $map;
 }
 
 $error = null;
 $notice = null;
-$rows = [];
-$badgeMap = [];
-$totalItems = null;
-$totalFiles = 0;
-$totalFolders = 0;
+$children = [];
+$breadcrumbs = [];
+$totalItems = 0;
+$fileCount = 0;
+$folderCount = 0;
 $totalSize = 0;
 $drives = [];
 $categories = [];
@@ -96,78 +91,69 @@ try {
     $error = trim(($error ? $error . ' | ' : '') . 'Could not load categories: ' . $e->getMessage());
 }
 
-$status = (string)($_GET['status'] ?? 'uncategorised');
-if (!in_array($status, ['any', 'categorised', 'uncategorised'], true)) {
-    $status = 'uncategorised';
-}
-$driveId = max(0, (int)($_GET['drive_id'] ?? 0));
-$entryType = (string)($_GET['entry_type'] ?? 'file');
-if (!in_array($entryType, ['any', 'file', 'folder'], true)) {
-    $entryType = 'file';
-}
-$pathContains = trim((string)($_GET['path_contains'] ?? ''));
-$nameContains = trim((string)($_GET['name_contains'] ?? ''));
-$limit = max(1, min(CATEGORY_WORKFLOW_LIMIT_MAX, (int)($_GET['limit'] ?? 500)));
-$canRun = $driveId > 0;
+$driveId = (int)($_GET['drive_id'] ?? ($drives[0]['id'] ?? 0));
+$currentPath = trim((string)($_GET['path'] ?? ''), '/');
+$selectedEntryId = (int)($_GET['selected_entry_id'] ?? 0);
+$page = max(1, (int)($_GET['page'] ?? 1));
+$offset = ($page - 1) * CATEGORY_WORKFLOW_PAGE_SIZE;
+$sort = (string)($_GET['sort'] ?? 'name');
+$dir = strtolower((string)($_GET['dir'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
+$nextDir = $dir === 'asc' ? 'desc' : 'asc';
 
-if (!$canRun) {
-    $notice = 'Select a drive to review manual category assignments. This page uses manual assignments only so it stays fast; rule-based previews remain available from Category Preview.';
+$selectedDrive = null;
+foreach ($drives as $drive) {
+    if ((int)$drive['id'] === $driveId) {
+        $selectedDrive = $drive;
+        break;
+    }
+}
+if (!$selectedDrive && $drives) {
+    $selectedDrive = $drives[0];
+    $driveId = (int)$selectedDrive['id'];
 }
 
 try {
-    if ($canRun) {
+    if ($driveId > 0) {
         $visibleSql = IgnoredFolderSql::excludeCondition('f');
-        $manualSql = cw_manual_match_sql('f');
-        $where = ['f.is_missing = 0', $visibleSql, 'f.drive_id = ?'];
-        $params = [$driveId];
+        $unassignedSql = 'NOT ' . cw_manual_match_sql('f');
+        $sortSql = match ($sort) {
+            'type' => "CASE WHEN f.entry_type = 'folder' THEN 'Folder' ELSE COALESCE(f.extension, '') END",
+            'size' => 'f.size_bytes',
+            'modified' => 'f.modified_at',
+            default => 'f.name',
+        };
 
-        if ($entryType !== 'any') {
-            $where[] = 'f.entry_type = ?';
-            $params[] = $entryType;
-        }
-        if ($pathContains !== '') {
-            $where[] = 'f.relative_path LIKE ?';
-            $params[] = '%' . $pathContains . '%';
-        }
-        if ($nameContains !== '') {
-            $where[] = 'f.name LIKE ?';
-            $params[] = '%' . $nameContains . '%';
-        }
+        $summaryStmt = db()->prepare("SELECT COUNT(*) AS total_items, SUM(f.entry_type = 'file') AS file_count, SUM(f.entry_type = 'folder') AS folder_count, COALESCE(SUM(CASE WHEN f.entry_type = 'file' THEN f.size_bytes ELSE 0 END), 0) AS total_size FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$unassignedSql} AND f.parent_path = ?");
+        $summaryStmt->execute([$driveId, $currentPath]);
+        $summary = $summaryStmt->fetch() ?: [];
+        $totalItems = (int)($summary['total_items'] ?? 0);
+        $fileCount = (int)($summary['file_count'] ?? 0);
+        $folderCount = (int)($summary['folder_count'] ?? 0);
+        $totalSize = (int)($summary['total_size'] ?? 0);
 
-        if ($status === 'categorised') {
-            $where[] = $manualSql;
-        } elseif ($status === 'uncategorised') {
-            $where[] = "NOT {$manualSql}";
-        }
-
-        $whereSql = implode(' AND ', $where);
-        $fetchLimit = $limit + 1;
-        $stmt = db()->prepare("SELECT f.id, f.drive_id, f.relative_path, f.name, f.entry_type, f.extension, f.size_bytes, f.modified_at, d.friendly_name FROM file_entries f JOIN drives d ON d.id = f.drive_id WHERE {$whereSql} ORDER BY f.relative_path ASC LIMIT ?");
-        foreach ($params as $index => $value) {
-            $stmt->bindValue($index + 1, $value);
-        }
-        $stmt->bindValue(count($params) + 1, $fetchLimit, PDO::PARAM_INT);
+        $stmt = db()->prepare("SELECT f.id, f.drive_id, f.relative_path, f.name, f.entry_type, f.extension, f.size_bytes, f.modified_at FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$unassignedSql} AND f.parent_path = ? ORDER BY CASE WHEN f.entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, f.name ASC LIMIT ? OFFSET ?");
+        $stmt->bindValue(1, $driveId, PDO::PARAM_INT);
+        $stmt->bindValue(2, $currentPath);
+        $stmt->bindValue(3, CATEGORY_WORKFLOW_PAGE_SIZE, PDO::PARAM_INT);
+        $stmt->bindValue(4, $offset, PDO::PARAM_INT);
         $stmt->execute();
-        $rows = $stmt->fetchAll();
+        $children = $stmt->fetchAll();
 
-        if (count($rows) > $limit) {
-            array_pop($rows);
-            $notice = trim(($notice ? $notice . ' ' : '') . 'More matching rows exist; narrow the filter or increase the limit.');
+        $running = '';
+        foreach (array_filter(explode('/', $currentPath), static fn(string $v): bool => $v !== '') as $part) {
+            $running = $running === '' ? $part : $running . '/' . $part;
+            $breadcrumbs[] = ['name' => $part, 'path' => $running];
         }
-
-        foreach ($rows as $row) {
-            if ($row['entry_type'] === 'file') {
-                $totalFiles++;
-                $totalSize += (int)$row['size_bytes'];
-            } else {
-                $totalFolders++;
-            }
-        }
-        $totalItems = count($rows);
-        $badgeMap = cw_load_manual_badges(array_column($rows, 'id'));
+    } else {
+        $notice = 'Add or scan a drive before using Category Workflow.';
     }
 } catch (Throwable $e) {
-    $error = trim(($error ? $error . ' | ' : '') . 'Could not load category workflow results: ' . $e->getMessage());
+    $error = trim(($error ? $error . ' | ' : '') . 'Could not load workflow folder: ' . $e->getMessage());
+}
+
+$totalPages = max(1, (int)ceil($totalItems / CATEGORY_WORKFLOW_PAGE_SIZE));
+if ($page > $totalPages) {
+    $page = $totalPages;
 }
 
 render_header('Category Workflow');
@@ -177,63 +163,59 @@ render_header('Category Workflow');
 
 <div class="card">
     <h2>Category Workflow</h2>
-    <p class="muted">Fast manual-review page. Use this to find items that do or do not have a manual category assignment. Right-click one or more rows to add/remove a category. Rule-based category checks are intentionally not calculated here.</p>
-    <form method="get">
-        <div class="form-grid compact-search">
-            <label>Status
-                <select name="status">
-                    <option value="any" <?= $status === 'any' ? 'selected' : '' ?>>Any manual status</option>
-                    <option value="categorised" <?= $status === 'categorised' ? 'selected' : '' ?>>Has manual category</option>
-                    <option value="uncategorised" <?= $status === 'uncategorised' ? 'selected' : '' ?>>No manual category</option>
-                </select>
-            </label>
-            <label>Drive
-                <select name="drive_id">
-                    <option value="0">Choose a drive</option>
-                    <?php foreach ($drives as $drive): ?><option value="<?= e((string)$drive['id']) ?>" <?= $driveId === (int)$drive['id'] ? 'selected' : '' ?>><?= e((string)$drive['friendly_name']) ?></option><?php endforeach; ?>
-                </select>
-            </label>
-            <label>Entry type
-                <select name="entry_type">
-                    <option value="any" <?= $entryType === 'any' ? 'selected' : '' ?>>Files and folders</option>
-                    <option value="file" <?= $entryType === 'file' ? 'selected' : '' ?>>Files only</option>
-                    <option value="folder" <?= $entryType === 'folder' ? 'selected' : '' ?>>Folders only</option>
-                </select>
-            </label>
-            <label>Limit <input type="number" name="limit" min="1" max="<?= e((string)CATEGORY_WORKFLOW_LIMIT_MAX) ?>" value="<?= e((string)$limit) ?>"></label>
-            <label>Path contains <input type="text" name="path_contains" value="<?= e($pathContains) ?>"></label>
-            <label>Name contains <input type="text" name="name_contains" value="<?= e($nameContains) ?>"></label>
-        </div>
-        <p><button type="submit">Filter</button> <a class="button" href="category-workflow.php">Reset</a></p>
-    </form>
+    <p class="muted">Browse one drive at a time. This view only shows files/folders in the current folder that do not have a manual category assignment. Assign a category and the item disappears from this workflow after refresh.</p>
 </div>
 
-<div class="card">
-    <h2>Results</h2>
-    <p class="muted"><?= $totalItems === null ? 'No live scan run yet.' : 'Showing: ' . e(number_format($totalItems)) . ' | Files shown: ' . e(number_format($totalFiles)) . ' | Folders shown: ' . e(number_format($totalFolders)) . ' | Shown file size: ' . e(format_bytes($totalSize)) ?></p>
-    <div class="table-scroll">
-        <table class="auto-table selectable-table" data-status-target="workflow-status">
-            <thead><tr><th>Drive</th><th>Name</th><th>Type</th><th>Manual category</th><th>Path</th><th>Size</th><th>Modified</th><th>Open</th></tr></thead>
+<?php if (!$drives): ?>
+<div class="card"><p>No drives have been scanned yet.</p></div>
+<?php else: ?>
+<div class="card explorer-wrap" id="workflow-explorer">
+    <div class="explorer-sidebar">
+        <h3>Drives</h3>
+        <?php foreach ($drives as $drive): ?>
+            <?php $thisDriveId = (int)$drive['id']; $isSelected = $driveId === $thisDriveId; ?>
+            <div class="tree-drive <?= $isSelected ? 'selected selected-row' : '' ?>" data-drive-id="<?= e((string)$thisDriveId) ?>" data-url="<?= e(cw_link(['drive_id' => $thisDriveId, 'path' => '', 'selected_entry_id' => null, 'page' => 1])) ?>">
+                <span class="tree-toggle"><?= $isSelected ? '▾' : '▸' ?></span> 💽 <?= e((string)$drive['friendly_name']) ?>
+            </div>
+            <?php if ($isSelected): ?><?php cw_render_tree($thisDriveId, '', $currentPath); ?><?php endif; ?>
+        <?php endforeach; ?>
+    </div>
+
+    <div class="explorer-main">
+        <div class="breadcrumbs">
+            <a href="<?= e(cw_link(['drive_id' => $driveId, 'path' => '', 'page' => 1])) ?>"><?= e((string)($selectedDrive['friendly_name'] ?? 'Drive')) ?></a>
+            <?php foreach ($breadcrumbs as $crumb): ?> / <a href="<?= e(cw_link(['drive_id' => $driveId, 'path' => $crumb['path'], 'page' => 1])) ?>"><?= e((string)$crumb['name']) ?></a><?php endforeach; ?>
+        </div>
+
+        <?php if ($totalItems > CATEGORY_WORKFLOW_PAGE_SIZE): ?>
+            <div class="status-bar">Showing <?= e((string)($offset + 1)) ?>-<?= e((string)min($offset + count($children), $totalItems)) ?> of <?= e(number_format($totalItems)) ?> unassigned entries in this folder. <a class="button" href="<?= e(cw_link(['page' => max(1, $page - 1)])) ?>">Previous</a> <a class="button" href="<?= e(cw_link(['page' => min($totalPages, $page + 1)])) ?>">Next</a></div>
+        <?php endif; ?>
+
+        <table class="explorer-table selectable-table" data-status-target="workflow-status">
+            <thead><tr><?php foreach (['name' => 'Name', 'type' => 'Type', 'size' => 'Size', 'modified' => 'Modified'] as $key => $label): ?><th><a href="<?= e(cw_link(['sort' => $key, 'dir' => $sort === $key ? $nextDir : 'asc', 'page' => 1])) ?>"><?= e($label) ?><?= $sort === $key ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th><?php endforeach; ?></tr></thead>
             <tbody>
-                <?php foreach ($rows as $row): ?>
-                    <?php $openUrl = 'files.php?' . http_build_query(['drive_id' => (int)$row['drive_id'], 'path' => cw_parent((string)$row['relative_path']), 'selected_entry_id' => (int)$row['id'], 'explorer_page' => 1]) . '#explorer-panel'; ?>
-                    <tr class="search-result-row selectable-row" data-id="<?= e((string)$row['id']) ?>" data-entry-type="<?= e((string)$row['entry_type']) ?>" data-entry-name="<?= e((string)$row['name']) ?>" data-url="<?= e($openUrl) ?>" data-size="<?= e((string)(int)$row['size_bytes']) ?>" data-is-file="<?= $row['entry_type'] === 'file' ? '1' : '0' ?>">
-                        <td><?= e((string)$row['friendly_name']) ?></td>
-                        <td><?= $row['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= e((string)$row['name']) ?></td>
-                        <td><?= e($row['entry_type'] === 'folder' ? 'Folder' : strtoupper((string)$row['extension']) . ' File') ?></td>
-                        <td><?= cw_badges($badgeMap, (int)$row['id']) ?></td>
-                        <td class="path-cell"><?= e((string)$row['relative_path']) ?></td>
-                        <td class="nowrap"><?= $row['entry_type'] === 'file' ? e(format_bytes((int)$row['size_bytes'])) : '' ?></td>
-                        <td class="nowrap"><?= e((string)$row['modified_at']) ?></td>
-                        <td><a class="button" href="<?= e($openUrl) ?>">Open</a></td>
+                <?php if ($currentPath !== ''): ?><tr class="explorer-row" data-url="<?= e(cw_link(['path' => cw_parent($currentPath), 'page' => 1])) ?>"><td>↩ ..</td><td>Folder</td><td></td><td></td></tr><?php endif; ?>
+                <?php foreach ($children as $entry): ?>
+                    <?php $entryUrl = $entry['entry_type'] === 'folder' ? cw_link(['drive_id' => $driveId, 'path' => $entry['relative_path'], 'selected_entry_id' => null, 'page' => 1]) : ''; ?>
+                    <tr id="entry-<?= e((string)$entry['id']) ?>" class="search-result-row explorer-row selectable-row <?= $selectedEntryId === (int)$entry['id'] ? 'selected-row target-selected-row' : '' ?>" data-id="<?= e((string)$entry['id']) ?>" data-entry-type="<?= e((string)$entry['entry_type']) ?>" data-entry-name="<?= e((string)$entry['name']) ?>" data-url="<?= e($entryUrl) ?>" data-size="<?= e((string)(int)$entry['size_bytes']) ?>" data-is-file="<?= $entry['entry_type'] === 'file' ? '1' : '0' ?>">
+                        <td><?= $entry['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= e((string)$entry['name']) ?></td>
+                        <td><?= e($entry['entry_type'] === 'folder' ? 'Folder' : strtoupper((string)$entry['extension']) . ' File') ?></td>
+                        <td><?= $entry['entry_type'] === 'file' ? e(format_bytes((int)$entry['size_bytes'])) : '' ?></td>
+                        <td><?= e((string)$entry['modified_at']) ?></td>
                     </tr>
                 <?php endforeach; ?>
-                <?php if (!$rows): ?><tr><td colspan="8">No matching entries shown. Select a drive/filter and run the workflow.</td></tr><?php endif; ?>
+                <?php if (!$children): ?><tr><td colspan="4">No unassigned entries in this folder.</td></tr><?php endif; ?>
             </tbody>
         </table>
+
+        <?php if ($totalItems > CATEGORY_WORKFLOW_PAGE_SIZE): ?>
+            <div class="status-bar">Page <?= e((string)$page) ?> of <?= e((string)$totalPages) ?>. <a class="button" href="<?= e(cw_link(['page' => max(1, $page - 1)])) ?>">Previous</a> <a class="button" href="<?= e(cw_link(['page' => min($totalPages, $page + 1)])) ?>">Next</a></div>
+        <?php endif; ?>
+
+        <div class="status-bar" id="workflow-status" data-total-count="<?= e((string)$totalItems) ?>" data-total-size="<?= e((string)$totalSize) ?>" data-file-count="<?= e((string)$fileCount) ?>" data-folder-count="<?= e((string)$folderCount) ?>">Unassigned in this folder: <?= e(number_format($totalItems)) ?> | Files: <?= e(number_format($fileCount)) ?> | Folders: <?= e(number_format($folderCount)) ?> | File size: <?= e(format_bytes($totalSize)) ?></div>
     </div>
-    <div class="status-bar" id="workflow-status" data-total-count="<?= e((string)($totalItems ?? 0)) ?>" data-total-size="<?= e((string)$totalSize) ?>" data-file-count="<?= e((string)$totalFiles) ?>" data-folder-count="<?= e((string)$totalFolders) ?>"></div>
 </div>
+<?php endif; ?>
 
 <div id="context-menu" class="context-menu"><button type="button" data-context-action="add_category">Add to category</button><button type="button" data-context-action="remove_category">Remove from category</button><hr><button type="button" data-context-action="rename">Rename...</button><button type="button" data-context-action="move">Move...</button><button type="button" data-context-action="delete">Delete...</button></div>
 <div id="drive-context-menu" class="context-menu"><button type="button" data-drive-action="remove_drive">Remove drive from DB...</button></div>
@@ -241,5 +223,32 @@ render_header('Category Workflow');
 <form method="post" action="files-action.php" id="context-form"><input type="hidden" name="return_url" value="<?= e($_SERVER['REQUEST_URI'] ?? 'category-workflow.php') ?>"><input type="hidden" name="action" id="context-action-input"><input type="hidden" name="selected_ids" id="context-selected-ids"><input type="hidden" name="drive_id" id="context-drive-id">
     <div id="context-dialog" class="context-dialog hidden"><div class="context-dialog-card"><h3 id="context-dialog-title">Action</h3><div id="context-category-area"><label>Category <select name="context_category_id"><?php foreach ($categories as $category): ?><option value="<?= e((string)$category['id']) ?>"><?= e((string)$category['name']) ?></option><?php endforeach; ?></select></label></div><div id="context-move-area"><label>Destination drive <select name="destination_drive_id"><?php foreach ($drives as $drive): ?><option value="<?= e((string)$drive['id']) ?>"><?= e((string)$drive['friendly_name']) ?></option><?php endforeach; ?></select></label></div><div id="context-rename-area"><label>New name <input type="text" name="new_name" id="context-new-name"></label></div><p id="context-dialog-note" class="muted"></p><p><button type="submit">Confirm</button> <button type="button" id="context-cancel-button">Cancel</button></p></div></div>
 </form>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    document.addEventListener('dblclick', function (event) {
+        const row = event.target.closest('[data-url]');
+        if (!row || !row.dataset.url) {
+            return;
+        }
+        event.preventDefault();
+        window.location.href = row.dataset.url;
+    });
+    document.addEventListener('click', function (event) {
+        const drive = event.target.closest('.tree-drive[data-url]');
+        const folder = event.target.closest('.tree-folder[data-url]');
+        if (!drive && !folder) {
+            return;
+        }
+        if (event.target.closest('.tree-toggle')) {
+            window.location.href = (drive || folder).dataset.url;
+            return;
+        }
+        if (drive) {
+            window.location.href = drive.dataset.url;
+        }
+    });
+});
+</script>
 
 <?php render_footer(); ?>
