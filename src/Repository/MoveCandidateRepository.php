@@ -42,6 +42,13 @@ final class MoveCandidateRepository
         return [$baseSql, $params];
     }
 
+    public function hasEnabledTarget(int $categoryId, int $targetDriveId): bool
+    {
+        $stmt = $this->db->prepare('SELECT COUNT(*) FROM category_drive_targets cdt JOIN categories c ON c.id = cdt.category_id AND c.is_active = 1 JOIN drives d ON d.id = cdt.drive_id AND d.is_active = 1 WHERE cdt.is_enabled = 1 AND cdt.category_id = ? AND cdt.drive_id = ?');
+        $stmt->execute([$categoryId, $targetDriveId]);
+        return (int)$stmt->fetchColumn() > 0;
+    }
+
     public function count(array $filters): int
     {
         [$baseSql, $params] = $this->sqlParts($filters);
@@ -79,6 +86,19 @@ final class MoveCandidateRepository
         $stmt->bindValue(count($params) + 2, $offset, PDO::PARAM_INT);
         $stmt->execute();
         return $stmt->fetchAll();
+    }
+
+    public function unsavedCount(int $planId, int $categoryId, int $targetDriveId): int
+    {
+        [$baseSql, $params] = $this->sqlParts(['category_id' => $categoryId, 'target_drive_id' => $targetDriveId]);
+        $stmt = $this->db->prepare("SELECT COUNT(*) {$baseSql} AND NOT EXISTS (SELECT 1 FROM move_plan_items mpi WHERE mpi.move_plan_id = ? AND mpi.file_entry_id = f.id)");
+        $bind = 1;
+        foreach ($params as $value) {
+            $stmt->bindValue($bind++, $value);
+        }
+        $stmt->bindValue($bind, $planId, PDO::PARAM_INT);
+        $stmt->execute();
+        return (int)$stmt->fetchColumn();
     }
 
     public function unsavedBatch(int $planId, int $categoryId, int $targetDriveId, int $limit): array
