@@ -5,6 +5,7 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 
 use DriveMaster\Repository\CategoryWorkflowRepository;
+use DriveMaster\Support\IgnoredFolderSql;
 
 function csd_parent(string $path): string
 {
@@ -31,17 +32,61 @@ function csd_format_type(array $entry): string
     return ($extension !== '' ? $extension : 'Unknown') . ' File';
 }
 
-function csd_category_badge(array $entry): string
+function csd_category_badges(array $map, int $entryId): string
 {
-    $name = trim((string)($entry['category_name'] ?? ''));
-    if ($name === '') {
-        return '<span class="muted">None</span>';
+    if (empty($map[$entryId])) {
+        return '';
     }
-    $colour = trim((string)($entry['category_color_hex'] ?? ''));
-    if (!preg_match('/^#[0-9a-fA-F]{6}$/', $colour)) {
-        $colour = '#d9e0e7';
+    $out = '';
+    foreach ($map[$entryId] as $badge) {
+        $source = $badge['source'] === 'manual' ? 'manual' : 'rule';
+        $out .= '<span class="category-badge category-' . e($source) . '" title="' . e($source) . '">' . e($badge['name']) . '</span> ';
     }
-    return '<span class="category-badge"><span class="category-colour-chip" style="background:' . e($colour) . '"></span>' . e($name) . '</span>';
+    return trim($out);
+}
+
+function csd_load_category_badges(array $entryIds): array
+{
+    $entryIds = array_values(array_unique(array_filter(array_map('intval', $entryIds), static fn(int $id): bool => $id > 0)));
+    if (!$entryIds) {
+        return [];
+    }
+
+    $placeholders = implode(',', array_fill(0, count($entryIds), '?'));
+    $visibleSql = IgnoredFolderSql::excludeCondition('f');
+    $sql = "
+        SELECT f.id AS file_entry_id, c.name AS category_name, 'manual' AS source
+        FROM file_entries f
+        JOIN category_manual_assignments cma ON cma.category_id IS NOT NULL
+        JOIN categories c ON c.id = cma.category_id AND c.is_active = 1
+        WHERE f.id IN ({$placeholders})
+        AND {$visibleSql}
+        AND (cma.file_entry_id = f.id OR (cma.assignment_type = 'folder' AND cma.drive_id = f.drive_id AND cma.path_prefix IS NOT NULL AND (f.relative_path = cma.path_prefix OR f.relative_path LIKE CONCAT(cma.path_prefix, '/%'))))
+        UNION ALL
+        SELECT f.id AS file_entry_id, c.name AS category_name, 'rule' AS source
+        FROM file_entries f
+        JOIN category_rules cr ON cr.is_enabled = 1 AND (cr.drive_id IS NULL OR cr.drive_id = f.drive_id)
+        JOIN categories c ON c.id = cr.category_id AND c.is_active = 1
+        WHERE f.id IN ({$placeholders})
+        AND {$visibleSql}
+        AND ((cr.rule_type = 'extension' AND cr.pattern = f.extension) OR (cr.rule_type = 'folder_path' AND (f.relative_path = cr.pattern OR f.relative_path LIKE CONCAT(cr.pattern, '/%'))) OR (cr.rule_type = 'path_contains' AND f.relative_path LIKE CONCAT('%', cr.pattern, '%')) OR (cr.rule_type = 'name_contains' AND f.name LIKE CONCAT('%', cr.pattern, '%')))
+        ORDER BY category_name, source
+    ";
+
+    $stmt = db()->prepare($sql);
+    $stmt->execute(array_merge($entryIds, $entryIds));
+    $map = [];
+    $seen = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $entryId = (int)$row['file_entry_id'];
+        $key = $entryId . '|' . $row['category_name'] . '|' . $row['source'];
+        if (isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $map[$entryId][] = ['name' => (string)$row['category_name'], 'source' => (string)$row['source']];
+    }
+    return $map;
 }
 
 header('Content-Type: application/json; charset=utf-8');
@@ -55,7 +100,9 @@ try {
     $mode = (string)($_GET['mode'] ?? 'unassigned');
     $mode = $mode === 'assigned' ? 'assigned' : 'unassigned';
     $modeLabel = $mode === 'assigned' ? 'Categorised' : 'Uncategorised';
-    $showCategoryColumn = $mode === 'assigned';
+    if ($mode === 'unassigned' && $sort === 'category') {
+        $sort = 'name';
+    }
 
     if ($driveId <= 0) {
         throw new RuntimeException('Missing drive ID.');
@@ -80,6 +127,7 @@ try {
     }
     $offset = ($page - 1) * CategoryWorkflowRepository::PAGE_SIZE;
     $children = $repo->folderChildren($driveId, $path, $sort, $dir, $page, $mode);
+    $categoryMap = csd_load_category_badges(array_column($children, 'id'));
 
     $breadcrumbs = '<a href="' . e(csd_link(['drive_id' => $driveId, 'path' => '', 'page' => 1, 'mode' => $mode])) . '" data-status-path="" data-drive-id="' . e((string)$driveId) . '">' . e((string)$drive['friendly_name']) . '</a>';
     $running = '';
@@ -91,18 +139,18 @@ try {
     $rows = '';
     if ($path !== '') {
         $parentPath = csd_parent($path);
-        $rows .= '<tr class="explorer-row" data-url="' . e(csd_link(['drive_id' => $driveId, 'path' => $parentPath, 'page' => 1, 'mode' => $mode])) . '" data-status-path="' . e($parentPath) . '" data-drive-id="' . e((string)$driveId) . '"><td>↩ ..</td><td>Folder</td>' . ($showCategoryColumn ? '<td></td>' : '') . '<td></td><td></td></tr>';
+        $rows .= '<tr class="explorer-row" data-url="' . e(csd_link(['drive_id' => $driveId, 'path' => $parentPath, 'page' => 1, 'mode' => $mode])) . '" data-status-path="' . e($parentPath) . '" data-drive-id="' . e((string)$driveId) . '"><td>↩ ..</td><td>Folder</td><td></td><td></td><td></td></tr>';
     }
 
     foreach ($children as $entry) {
         $entryId = (int)$entry['id'];
         $entryUrl = $entry['entry_type'] === 'folder' ? csd_link(['drive_id' => $driveId, 'path' => $entry['relative_path'], 'selected_entry_id' => null, 'page' => 1, 'mode' => $mode]) : '';
         $rows .= '<tr id="entry-' . e((string)$entryId) . '" class="search-result-row explorer-row selectable-row" data-id="' . e((string)$entryId) . '" data-entry-type="' . e((string)$entry['entry_type']) . '" data-entry-name="' . e((string)$entry['name']) . '" data-url="' . e($entryUrl) . '" data-status-path="' . e($entry['entry_type'] === 'folder' ? (string)$entry['relative_path'] : '') . '" data-drive-id="' . e((string)$driveId) . '" data-size="' . e((string)(int)$entry['size_bytes']) . '" data-is-file="' . ($entry['entry_type'] === 'file' ? '1' : '0') . '">';
-        $rows .= '<td>' . ($entry['entry_type'] === 'folder' ? '📁' : '📄') . ' ' . e((string)$entry['name']) . '</td><td>' . e(csd_format_type($entry)) . '</td>' . ($showCategoryColumn ? '<td>' . csd_category_badge($entry) . '</td>' : '') . '<td>' . ($entry['entry_type'] === 'file' ? e(format_bytes((int)$entry['size_bytes'])) : '') . '</td><td>' . e((string)$entry['modified_at']) . '</td></tr>';
+        $rows .= '<td>' . ($entry['entry_type'] === 'folder' ? '📁' : '📄') . ' ' . e((string)$entry['name']) . '</td><td>' . e(csd_format_type($entry)) . '</td><td>' . csd_category_badges($categoryMap, $entryId) . '</td><td>' . ($entry['entry_type'] === 'file' ? e(format_bytes((int)$entry['size_bytes'])) : '') . '</td><td>' . e((string)$entry['modified_at']) . '</td></tr>';
     }
 
     if (!$children) {
-        $rows .= '<tr><td colspan="' . ($showCategoryColumn ? '5' : '4') . '">No ' . e(strtolower($modeLabel)) . ' entries in this folder.</td></tr>';
+        $rows .= '<tr><td colspan="5">No ' . e(strtolower($modeLabel)) . ' entries in this folder.</td></tr>';
     }
 
     $pagerTop = '';
@@ -123,7 +171,6 @@ try {
         'page' => $page,
         'mode' => $mode,
         'mode_label' => $modeLabel,
-        'show_category_column' => $showCategoryColumn,
         'breadcrumbs_html' => $breadcrumbs,
         'rows_html' => $rows,
         'pager_top_html' => $pagerTop,
