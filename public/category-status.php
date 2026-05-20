@@ -6,6 +6,7 @@ require dirname(__DIR__) . '/src/bootstrap.php';
 require __DIR__ . '/_layout.php';
 
 use DriveMaster\Repository\CategoryWorkflowRepository;
+use DriveMaster\Support\IgnoredFolderSql;
 
 function cs_parent(string $path): string
 {
@@ -27,17 +28,61 @@ function cs_link(array $params = []): string
     return 'category-status.php?' . http_build_query($query) . '#category-status-explorer';
 }
 
-function cs_category_badge(array $entry): string
+function cs_category_badges(array $map, int $entryId): string
 {
-    $name = trim((string)($entry['category_name'] ?? ''));
-    if ($name === '') {
-        return '<span class="muted">None</span>';
+    if (empty($map[$entryId])) {
+        return '';
     }
-    $colour = trim((string)($entry['category_color_hex'] ?? ''));
-    if (!preg_match('/^#[0-9a-fA-F]{6}$/', $colour)) {
-        $colour = '#d9e0e7';
+    $out = '';
+    foreach ($map[$entryId] as $badge) {
+        $source = $badge['source'] === 'manual' ? 'manual' : 'rule';
+        $out .= '<span class="category-badge category-' . e($source) . '" title="' . e($source) . '">' . e($badge['name']) . '</span> ';
     }
-    return '<span class="category-badge"><span class="category-colour-chip" style="background:' . e($colour) . '"></span>' . e($name) . '</span>';
+    return trim($out);
+}
+
+function cs_load_category_badges(array $entryIds): array
+{
+    $entryIds = array_values(array_unique(array_filter(array_map('intval', $entryIds), static fn(int $id): bool => $id > 0)));
+    if (!$entryIds) {
+        return [];
+    }
+
+    $placeholders = implode(',', array_fill(0, count($entryIds), '?'));
+    $visibleSql = IgnoredFolderSql::excludeCondition('f');
+    $sql = "
+        SELECT f.id AS file_entry_id, c.name AS category_name, 'manual' AS source
+        FROM file_entries f
+        JOIN category_manual_assignments cma ON cma.category_id IS NOT NULL
+        JOIN categories c ON c.id = cma.category_id AND c.is_active = 1
+        WHERE f.id IN ({$placeholders})
+        AND {$visibleSql}
+        AND (cma.file_entry_id = f.id OR (cma.assignment_type = 'folder' AND cma.drive_id = f.drive_id AND cma.path_prefix IS NOT NULL AND (f.relative_path = cma.path_prefix OR f.relative_path LIKE CONCAT(cma.path_prefix, '/%'))))
+        UNION ALL
+        SELECT f.id AS file_entry_id, c.name AS category_name, 'rule' AS source
+        FROM file_entries f
+        JOIN category_rules cr ON cr.is_enabled = 1 AND (cr.drive_id IS NULL OR cr.drive_id = f.drive_id)
+        JOIN categories c ON c.id = cr.category_id AND c.is_active = 1
+        WHERE f.id IN ({$placeholders})
+        AND {$visibleSql}
+        AND ((cr.rule_type = 'extension' AND cr.pattern = f.extension) OR (cr.rule_type = 'folder_path' AND (f.relative_path = cr.pattern OR f.relative_path LIKE CONCAT(cr.pattern, '/%'))) OR (cr.rule_type = 'path_contains' AND f.relative_path LIKE CONCAT('%', cr.pattern, '%')) OR (cr.rule_type = 'name_contains' AND f.name LIKE CONCAT('%', cr.pattern, '%')))
+        ORDER BY category_name, source
+    ";
+
+    $stmt = db()->prepare($sql);
+    $stmt->execute(array_merge($entryIds, $entryIds));
+    $map = [];
+    $seen = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $entryId = (int)$row['file_entry_id'];
+        $key = $entryId . '|' . $row['category_name'] . '|' . $row['source'];
+        if (isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $map[$entryId][] = ['name' => (string)$row['category_name'], 'source' => (string)$row['source']];
+    }
+    return $map;
 }
 
 function cs_on_branch(string $folderPath, string $activePath): bool
@@ -68,6 +113,7 @@ function cs_render_tree(CategoryWorkflowRepository $repo, int $driveId, string $
 $error = null;
 $notice = null;
 $children = [];
+$categoryMap = [];
 $breadcrumbs = [];
 $totalItems = 0;
 $fileCount = 0;
@@ -96,7 +142,6 @@ $nextDir = $dir === 'asc' ? 'desc' : 'asc';
 $mode = (string)($_GET['mode'] ?? 'unassigned');
 $mode = $mode === 'assigned' ? 'assigned' : 'unassigned';
 $modeLabel = $mode === 'assigned' ? 'Categorised' : 'Uncategorised';
-$showCategoryColumn = $mode === 'assigned';
 
 $selectedDrive = null;
 foreach ($drives as $drive) {
@@ -122,7 +167,11 @@ try {
             $page = $totalPages;
         }
         $offset = ($page - 1) * CategoryWorkflowRepository::PAGE_SIZE;
+        if ($mode === 'unassigned' && $sort === 'category') {
+            $sort = 'name';
+        }
         $children = $repo->folderChildren($driveId, $currentPath, $sort, $dir, $page, $mode);
+        $categoryMap = cs_load_category_badges(array_column($children, 'id'));
         $running = '';
         foreach (array_filter(explode('/', $currentPath), static fn(string $v): bool => $v !== '') as $part) {
             $running = $running === '' ? $part : $running . '/' . $part;
@@ -150,7 +199,7 @@ render_header('Category Status');
         <a class="button" href="category-status-summary.php">Status Summary</a>
         <a class="button" href="category-conflicts.php">Conflicts</a>
     </div>
-    <div class="status-bar">Current view: <?= e($modeLabel) ?> items<?= $showCategoryColumn ? ' | Category colours shown' : ' | Category column hidden because these items have no category' ?></div>
+    <div class="status-bar">Current view: <?= e($modeLabel) ?> items</div>
 </div>
 
 <?php if (!$drives): ?>
@@ -169,37 +218,26 @@ render_header('Category Status');
     </div>
 
     <div class="explorer-main">
-        <div class="breadcrumbs">
-            <a href="<?= e(cs_link(['drive_id' => $driveId, 'path' => '', 'page' => 1, 'mode' => $mode])) ?>" data-status-path="" data-drive-id="<?= e((string)$driveId) ?>"><?= e((string)($selectedDrive['friendly_name'] ?? 'Drive')) ?></a>
-            <?php foreach ($breadcrumbs as $crumb): ?> / <a href="<?= e(cs_link(['drive_id' => $driveId, 'path' => $crumb['path'], 'page' => 1, 'mode' => $mode])) ?>" data-status-path="<?= e((string)$crumb['path']) ?>" data-drive-id="<?= e((string)$driveId) ?>"><?= e((string)$crumb['name']) ?></a><?php endforeach; ?>
-        </div>
-
+        <div class="breadcrumbs"><a href="<?= e(cs_link(['drive_id' => $driveId, 'path' => '', 'page' => 1, 'mode' => $mode])) ?>" data-status-path="" data-drive-id="<?= e((string)$driveId) ?>"><?= e((string)($selectedDrive['friendly_name'] ?? 'Drive')) ?></a><?php foreach ($breadcrumbs as $crumb): ?> / <a href="<?= e(cs_link(['drive_id' => $driveId, 'path' => $crumb['path'], 'page' => 1, 'mode' => $mode])) ?>" data-status-path="<?= e((string)$crumb['path']) ?>" data-drive-id="<?= e((string)$driveId) ?>"><?= e((string)$crumb['name']) ?></a><?php endforeach; ?></div>
         <?php if ($totalItems > CategoryWorkflowRepository::PAGE_SIZE): ?>
             <div class="status-bar status-explorer-pager">Showing <?= e((string)($offset + 1)) ?>-<?= e((string)min($offset + count($children), $totalItems)) ?> of <?= e(number_format($totalItems)) ?> <?= e(strtolower($modeLabel)) ?> entries in this folder. <a class="button" href="<?= e(cs_link(['page' => max(1, $page - 1), 'mode' => $mode])) ?>" data-status-page="<?= e((string)max(1, $page - 1)) ?>">Previous</a> <a class="button" href="<?= e(cs_link(['page' => min($totalPages, $page + 1), 'mode' => $mode])) ?>" data-status-page="<?= e((string)min($totalPages, $page + 1)) ?>">Next</a></div>
         <?php endif; ?>
-
         <table class="explorer-table selectable-table" data-status-target="category-status-bar">
-            <thead><tr><?php foreach (($showCategoryColumn ? ['name' => 'Name', 'type' => 'Type', 'category' => 'Category', 'size' => 'Size', 'modified' => 'Modified'] : ['name' => 'Name', 'type' => 'Type', 'size' => 'Size', 'modified' => 'Modified']) as $key => $label): ?><th><a href="<?= e(cs_link(['sort' => $key, 'dir' => $sort === $key ? $nextDir : 'asc', 'page' => 1, 'mode' => $mode])) ?>"><?= e($label) ?><?= $sort === $key ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a></th><?php endforeach; ?></tr></thead>
+            <thead><tr><?php foreach (['name' => 'Name', 'type' => 'Type', 'category' => 'Category', 'size' => 'Size', 'modified' => 'Modified'] as $key => $label): ?><th><?php if ($key === 'category'): ?><?= e($label) ?><?php else: ?><a href="<?= e(cs_link(['sort' => $key, 'dir' => $sort === $key ? $nextDir : 'asc', 'page' => 1, 'mode' => $mode])) ?>"><?= e($label) ?><?= $sort === $key ? e($dir === 'asc' ? ' ▲' : ' ▼') : '' ?></a><?php endif; ?></th><?php endforeach; ?></tr></thead>
             <tbody>
-                <?php if ($currentPath !== ''): ?><tr class="explorer-row" data-url="<?= e(cs_link(['path' => cs_parent($currentPath), 'page' => 1, 'mode' => $mode])) ?>" data-status-path="<?= e(cs_parent($currentPath)) ?>" data-drive-id="<?= e((string)$driveId) ?>"><td>↩ ..</td><td>Folder</td><?php if ($showCategoryColumn): ?><td></td><?php endif; ?><td></td><td></td></tr><?php endif; ?>
+                <?php if ($currentPath !== ''): ?><tr class="explorer-row" data-url="<?= e(cs_link(['path' => cs_parent($currentPath), 'page' => 1, 'mode' => $mode])) ?>" data-status-path="<?= e(cs_parent($currentPath)) ?>" data-drive-id="<?= e((string)$driveId) ?>"><td>↩ ..</td><td>Folder</td><td></td><td></td><td></td></tr><?php endif; ?>
                 <?php foreach ($children as $entry): ?>
                     <?php $entryUrl = $entry['entry_type'] === 'folder' ? cs_link(['drive_id' => $driveId, 'path' => $entry['relative_path'], 'selected_entry_id' => null, 'page' => 1, 'mode' => $mode]) : ''; ?>
                     <tr id="entry-<?= e((string)$entry['id']) ?>" class="search-result-row explorer-row selectable-row <?= $selectedEntryId === (int)$entry['id'] ? 'selected-row target-selected-row' : '' ?>" data-id="<?= e((string)$entry['id']) ?>" data-entry-type="<?= e((string)$entry['entry_type']) ?>" data-entry-name="<?= e((string)$entry['name']) ?>" data-url="<?= e($entryUrl) ?>" data-status-path="<?= e($entry['entry_type'] === 'folder' ? (string)$entry['relative_path'] : '') ?>" data-drive-id="<?= e((string)$driveId) ?>" data-size="<?= e((string)(int)$entry['size_bytes']) ?>" data-is-file="<?= $entry['entry_type'] === 'file' ? '1' : '0' ?>">
-                        <td><?= $entry['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= e((string)$entry['name']) ?></td>
-                        <td><?= e($entry['entry_type'] === 'folder' ? 'Folder' : strtoupper((string)$entry['extension']) . ' File') ?></td>
-                        <?php if ($showCategoryColumn): ?><td><?= cs_category_badge($entry) ?></td><?php endif; ?>
-                        <td><?= $entry['entry_type'] === 'file' ? e(format_bytes((int)$entry['size_bytes'])) : '' ?></td>
-                        <td><?= e((string)$entry['modified_at']) ?></td>
+                        <td><?= $entry['entry_type'] === 'folder' ? '📁' : '📄' ?> <?= e((string)$entry['name']) ?></td><td><?= e($entry['entry_type'] === 'folder' ? 'Folder' : strtoupper((string)$entry['extension']) . ' File') ?></td><td><?= cs_category_badges($categoryMap, (int)$entry['id']) ?></td><td><?= $entry['entry_type'] === 'file' ? e(format_bytes((int)$entry['size_bytes'])) : '' ?></td><td><?= e((string)$entry['modified_at']) ?></td>
                     </tr>
                 <?php endforeach; ?>
-                <?php if (!$children): ?><tr><td colspan="<?= $showCategoryColumn ? '5' : '4' ?>">No <?= e(strtolower($modeLabel)) ?> entries in this folder.</td></tr><?php endif; ?>
+                <?php if (!$children): ?><tr><td colspan="5">No <?= e(strtolower($modeLabel)) ?> entries in this folder.</td></tr><?php endif; ?>
             </tbody>
         </table>
-
         <?php if ($totalItems > CategoryWorkflowRepository::PAGE_SIZE): ?>
             <div class="status-bar status-explorer-pager">Page <?= e((string)$page) ?> of <?= e((string)$totalPages) ?>. <a class="button" href="<?= e(cs_link(['page' => max(1, $page - 1), 'mode' => $mode])) ?>" data-status-page="<?= e((string)max(1, $page - 1)) ?>">Previous</a> <a class="button" href="<?= e(cs_link(['page' => min($totalPages, $page + 1), 'mode' => $mode])) ?>" data-status-page="<?= e((string)min($totalPages, $page + 1)) ?>">Next</a></div>
         <?php endif; ?>
-
         <div class="status-bar" id="category-status-bar" data-mode-label="<?= e($modeLabel) ?>" data-total-count="<?= e((string)$totalItems) ?>" data-total-size="<?= e((string)$totalSize) ?>" data-file-count="<?= e((string)$fileCount) ?>" data-folder-count="<?= e((string)$folderCount) ?>"><?= e($modeLabel) ?> in this folder: <?= e(number_format($totalItems)) ?> | Files: <?= e(number_format($fileCount)) ?> | Folders: <?= e(number_format($folderCount)) ?> | File size: <?= e(format_bytes($totalSize)) ?></div>
     </div>
 </div>
@@ -207,10 +245,6 @@ render_header('Category Status');
 
 <div id="context-menu" class="context-menu"><button type="button" data-context-action="add_category">Add to category</button><button type="button" data-context-action="remove_category">Remove from category</button><hr><button type="button" data-context-action="rename">Rename...</button><button type="button" data-context-action="move">Move...</button><button type="button" data-context-action="delete">Delete...</button></div>
 <div id="drive-context-menu" class="context-menu"><button type="button" data-drive-action="remove_drive">Remove drive from DB...</button></div>
-
-<form method="post" action="files-action.php" id="context-form"><input type="hidden" name="return_url" value="<?= e($_SERVER['REQUEST_URI'] ?? 'category-status.php') ?>"><input type="hidden" name="action" id="context-action-input"><input type="hidden" name="selected_ids" id="context-selected-ids"><input type="hidden" name="drive_id" id="context-drive-id">
-    <div id="context-dialog" class="context-dialog hidden"><div class="context-dialog-card"><h3 id="context-dialog-title">Action</h3><div id="context-category-area"><label>Category <select name="context_category_id"><?php foreach ($categories as $category): ?><option value="<?= e((string)$category['id']) ?>"><?= e((string)$category['name']) ?></option><?php endforeach; ?></select></label></div><div id="context-move-area"><label>Destination drive <select name="destination_drive_id"><?php foreach ($drives as $drive): ?><option value="<?= e((string)$drive['id']) ?>"><?= e((string)$drive['friendly_name']) ?></option><?php endforeach; ?></select></label></div><div id="context-rename-area"><label>New name <input type="text" name="new_name" id="context-new-name"></label></div><p id="context-dialog-note" class="muted"></p><p><button type="submit">Confirm</button> <button type="button" id="context-cancel-button">Cancel</button></p></div></div>
-</form>
-
+<form method="post" action="files-action.php" id="context-form"><input type="hidden" name="return_url" value="<?= e($_SERVER['REQUEST_URI'] ?? 'category-status.php') ?>"><input type="hidden" name="action" id="context-action-input"><input type="hidden" name="selected_ids" id="context-selected-ids"><input type="hidden" name="drive_id" id="context-drive-id"><div id="context-dialog" class="context-dialog hidden"><div class="context-dialog-card"><h3 id="context-dialog-title">Action</h3><div id="context-category-area"><label>Category <select name="context_category_id"><?php foreach ($categories as $category): ?><option value="<?= e((string)$category['id']) ?>"><?= e((string)$category['name']) ?></option><?php endforeach; ?></select></label></div><div id="context-move-area"><label>Destination drive <select name="destination_drive_id"><?php foreach ($drives as $drive): ?><option value="<?= e((string)$drive['id']) ?>"><?= e((string)$drive['friendly_name']) ?></option><?php endforeach; ?></select></label></div><div id="context-rename-area"><label>New name <input type="text" name="new_name" id="context-new-name"></label></div><p id="context-dialog-note" class="muted"></p><p><button type="submit">Confirm</button> <button type="button" id="context-cancel-button">Cancel</button></p></div></div></form>
 <script src="assets/category-status-ajax.js?ts=<?= e((string)time()) ?>" defer></script>
 <?php render_footer(); ?>
