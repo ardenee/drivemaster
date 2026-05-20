@@ -88,6 +88,11 @@ function require_admin(): void
     DriveMaster\Support\Auth::requireAdmin(db());
 }
 
+function auth_has_users(): bool
+{
+    return DriveMaster\Support\Auth::userCount(db()) > 0;
+}
+
 function enforce_auth(): void
 {
     if (PHP_SAPI === 'cli') {
@@ -97,16 +102,14 @@ function enforce_auth(): void
     $openPages = ['login.php', 'logout.php', 'setup-admin.php', 'install.php'];
     DriveMaster\Support\Auth::startSession();
     DriveMaster\Support\Auth::ensureTable(db());
+    if (DriveMaster\Support\Auth::userCount(db()) <= 0) {
+        return;
+    }
     if (in_array($script, $openPages, true)) {
         return;
     }
-    if (DriveMaster\Support\Auth::userCount(db()) <= 0) {
-        header('Location: setup-admin.php');
-        exit;
-    }
     if (!DriveMaster\Support\Auth::currentUser(db())) {
-        $next = (string)($_SERVER['REQUEST_URI'] ?? 'index.php');
-        header('Location: login.php?next=' . rawurlencode($next));
+        header('Location: login.php');
         exit;
     }
 }
