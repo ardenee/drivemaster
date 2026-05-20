@@ -18,6 +18,11 @@ function mpdr_json(?string $json): array
     }
 }
 
+function mpdr_count(array $result, string $key): string
+{
+    return number_format((int)($result[$key] ?? 0));
+}
+
 $id = max(0, (int)($_GET['id'] ?? 0));
 $plan = null;
 if ($id > 0) {
@@ -51,7 +56,7 @@ $jobs = $stmt->fetchAll();
     <h2>Recent dry-runs</h2>
     <div class="table-scroll">
         <table class="auto-table compact-table">
-            <thead><tr><th>Job</th><th>Status</th><th>Created</th><th>Finished</th><th>Checked</th><th>Bytes</th><th>Issues</th><th>Source missing</th><th>Target unavailable</th><th>Target exists</th><th>Error</th></tr></thead>
+            <thead><tr><th>Job</th><th>Status</th><th>Created</th><th>Finished</th><th>Checked</th><th>Bytes</th><th>Total issues</th><th>Source missing</th><th>Size changed</th><th>Target mount missing</th><th>Parent missing</th><th>Parent not writable</th><th>Target exists</th><th>Temp exists</th><th>Same path</th><th>Error</th></tr></thead>
             <tbody>
             <?php foreach ($jobs as $job): ?>
                 <?php $result = mpdr_json($job['result_json'] ?? null); ?>
@@ -60,16 +65,21 @@ $jobs = $stmt->fetchAll();
                     <td><?= e($job['status']) ?></td>
                     <td><?= e($job['created_at']) ?></td>
                     <td><?= e($job['finished_at'] ?? '') ?></td>
-                    <td><?= e(number_format((int)($result['items_checked'] ?? 0))) ?></td>
+                    <td><?= e(mpdr_count($result, 'items_checked')) ?></td>
                     <td><?= e(format_bytes((int)($result['bytes_checked'] ?? 0))) ?></td>
-                    <td><?= e(number_format((int)($result['issue_count'] ?? 0))) ?></td>
-                    <td><?= e(number_format((int)($result['source_missing'] ?? 0))) ?></td>
-                    <td><?= e(number_format((int)($result['target_mount_missing'] ?? 0))) ?></td>
-                    <td><?= e(number_format((int)($result['target_already_exists'] ?? 0))) ?></td>
+                    <td><?= e(mpdr_count($result, 'issue_count')) ?></td>
+                    <td><?= e(mpdr_count($result, 'source_missing')) ?></td>
+                    <td><?= e(mpdr_count($result, 'source_size_mismatch')) ?></td>
+                    <td><?= e(mpdr_count($result, 'target_mount_missing')) ?></td>
+                    <td><?= e(mpdr_count($result, 'target_parent_missing')) ?></td>
+                    <td><?= e(mpdr_count($result, 'target_parent_not_writable')) ?></td>
+                    <td><?= e(mpdr_count($result, 'target_already_exists')) ?></td>
+                    <td><?= e(mpdr_count($result, 'temp_target_exists')) ?></td>
+                    <td><?= e(mpdr_count($result, 'same_source_target')) ?></td>
                     <td class="wrap-cell"><?= e($job['error_message'] ?? '') ?></td>
                 </tr>
             <?php endforeach; ?>
-            <?php if (!$jobs): ?><tr><td colspan="11">No dry-run jobs found for this plan.</td></tr><?php endif; ?>
+            <?php if (!$jobs): ?><tr><td colspan="16">No dry-run jobs found for this plan.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>
@@ -80,7 +90,7 @@ $jobs = $stmt->fetchAll();
     <?php if ($samples): ?>
         <div class="card">
             <h2>Sample issues from job #<?= e((string)$job['id']) ?></h2>
-            <p class="muted">Showing up to 25 sample issues captured by the dry-run.</p>
+            <p class="muted">Showing up to 50 sample issues captured by the dry-run.</p>
             <div class="table-scroll">
                 <table class="auto-table compact-table">
                     <thead><tr><th>Item</th><th>Source</th><th>Target</th><th>Path</th><th>Issues</th></tr></thead>
