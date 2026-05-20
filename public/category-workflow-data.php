@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/src/bootstrap.php';
 
-use DriveMaster\Support\IgnoredFolderSql;
-
-const CATEGORY_WORKFLOW_AJAX_PAGE_SIZE = 495;
+use DriveMaster\Repository\CategoryWorkflowRepository;
 
 function cwd_parent(string $path): string
 {
@@ -22,11 +20,6 @@ function cwd_parent(string $path): string
 function cwd_link(array $params = []): string
 {
     return 'category-workflow.php?' . http_build_query($params) . '#workflow-explorer';
-}
-
-function cwd_manual_match_sql(string $alias = 'f'): string
-{
-    return "EXISTS (SELECT 1 FROM category_manual_assignments cma WHERE cma.file_entry_id = {$alias}.id OR (cma.assignment_type = 'folder' AND cma.drive_id = {$alias}.drive_id AND cma.path_prefix IS NOT NULL AND ({$alias}.relative_path = cma.path_prefix OR {$alias}.relative_path LIKE CONCAT(cma.path_prefix, '/%'))))";
 }
 
 function cwd_format_type(array $entry): string
@@ -46,7 +39,6 @@ try {
     $page = max(1, (int)($_GET['page'] ?? 1));
     $sort = (string)($_GET['sort'] ?? 'name');
     $dir = strtolower((string)($_GET['dir'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
-    $offset = ($page - 1) * CATEGORY_WORKFLOW_AJAX_PAGE_SIZE;
 
     if ($driveId <= 0) {
         throw new RuntimeException('Missing drive ID.');
@@ -59,35 +51,18 @@ try {
         throw new RuntimeException('Drive not found.');
     }
 
-    $visibleSql = IgnoredFolderSql::excludeCondition('f');
-    $unassignedSql = 'NOT ' . cwd_manual_match_sql('f');
-    $sortSql = match ($sort) {
-        'type' => "CASE WHEN f.entry_type = 'folder' THEN 'Folder' ELSE COALESCE(f.extension, '') END",
-        'size' => 'f.size_bytes',
-        'modified' => 'f.modified_at',
-        default => 'f.name',
-    };
-
-    $summaryStmt = db()->prepare("SELECT COUNT(*) AS total_items, SUM(f.entry_type = 'file') AS file_count, SUM(f.entry_type = 'folder') AS folder_count, COALESCE(SUM(CASE WHEN f.entry_type = 'file' THEN f.size_bytes ELSE 0 END), 0) AS total_size FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$unassignedSql} AND f.parent_path = ?");
-    $summaryStmt->execute([$driveId, $path]);
-    $summary = $summaryStmt->fetch() ?: [];
-    $totalItems = (int)($summary['total_items'] ?? 0);
-    $fileCount = (int)($summary['file_count'] ?? 0);
-    $folderCount = (int)($summary['folder_count'] ?? 0);
-    $totalSize = (int)($summary['total_size'] ?? 0);
-    $totalPages = max(1, (int)ceil($totalItems / CATEGORY_WORKFLOW_AJAX_PAGE_SIZE));
+    $workflow = new CategoryWorkflowRepository(db());
+    $summary = $workflow->folderSummary($driveId, $path);
+    $totalItems = (int)$summary['total_items'];
+    $fileCount = (int)$summary['file_count'];
+    $folderCount = (int)$summary['folder_count'];
+    $totalSize = (int)$summary['total_size'];
+    $totalPages = max(1, (int)ceil($totalItems / CategoryWorkflowRepository::PAGE_SIZE));
     if ($page > $totalPages) {
         $page = $totalPages;
-        $offset = ($page - 1) * CATEGORY_WORKFLOW_AJAX_PAGE_SIZE;
     }
-
-    $stmt = db()->prepare("SELECT f.id, f.drive_id, f.relative_path, f.name, f.entry_type, f.extension, f.size_bytes, f.modified_at FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$unassignedSql} AND f.parent_path = ? ORDER BY CASE WHEN f.entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, f.name ASC LIMIT ? OFFSET ?");
-    $stmt->bindValue(1, $driveId, PDO::PARAM_INT);
-    $stmt->bindValue(2, $path);
-    $stmt->bindValue(3, CATEGORY_WORKFLOW_AJAX_PAGE_SIZE, PDO::PARAM_INT);
-    $stmt->bindValue(4, $offset, PDO::PARAM_INT);
-    $stmt->execute();
-    $children = $stmt->fetchAll();
+    $offset = ($page - 1) * CategoryWorkflowRepository::PAGE_SIZE;
+    $children = $workflow->folderChildren($driveId, $path, $sort, $dir, $page);
 
     $breadcrumbs = '<a href="' . e(cwd_link(['drive_id' => $driveId, 'path' => '', 'page' => 1])) . '" data-workflow-path="" data-drive-id="' . e((string)$driveId) . '">' . e((string)$drive['friendly_name']) . '</a>';
     $running = '';
@@ -115,7 +90,7 @@ try {
 
     $pagerTop = '';
     $pagerBottom = '';
-    if ($totalItems > CATEGORY_WORKFLOW_AJAX_PAGE_SIZE) {
+    if ($totalItems > CategoryWorkflowRepository::PAGE_SIZE) {
         $from = $totalItems === 0 ? 0 : $offset + 1;
         $to = min($offset + count($children), $totalItems);
         $prev = max(1, $page - 1);
