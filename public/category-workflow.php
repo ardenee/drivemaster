@@ -61,9 +61,10 @@ function cw_load_badges(array $entryIds): array
 }
 
 $error = null;
+$notice = null;
 $rows = [];
 $badgeMap = [];
-$totalItems = 0;
+$totalItems = null;
 $totalFiles = 0;
 $totalFolders = 0;
 $totalSize = 0;
@@ -94,58 +95,73 @@ if (!in_array($entryType, ['any', 'file', 'folder'], true)) {
 $pathContains = trim((string)($_GET['path_contains'] ?? ''));
 $nameContains = trim((string)($_GET['name_contains'] ?? ''));
 $limit = max(1, min(CATEGORY_WORKFLOW_LIMIT_MAX, (int)($_GET['limit'] ?? 500)));
+$requiresDrive = in_array($status, ['categorised', 'uncategorised', 'conflicted'], true);
+$canRun = !$requiresDrive || $driveId > 0;
+
+if (!$canRun) {
+    $notice = 'Select a drive to review categorised, uncategorised, or conflicted items. This avoids scanning every file on every drive in one request.';
+}
 
 try {
-    $visibleSql = IgnoredFolderSql::excludeCondition('f');
-    $where = ['f.is_missing = 0', $visibleSql];
-    $params = [];
+    if ($canRun) {
+        $visibleSql = IgnoredFolderSql::excludeCondition('f');
+        $where = ['f.is_missing = 0', $visibleSql];
+        $params = [];
 
-    if ($driveId > 0) {
-        $where[] = 'f.drive_id = ?';
-        $params[] = $driveId;
-    }
-    if ($entryType !== 'any') {
-        $where[] = 'f.entry_type = ?';
-        $params[] = $entryType;
-    }
-    if ($pathContains !== '') {
-        $where[] = 'f.relative_path LIKE ?';
-        $params[] = '%' . $pathContains . '%';
-    }
-    if ($nameContains !== '') {
-        $where[] = 'f.name LIKE ?';
-        $params[] = '%' . $nameContains . '%';
-    }
+        if ($driveId > 0) {
+            $where[] = 'f.drive_id = ?';
+            $params[] = $driveId;
+        }
+        if ($entryType !== 'any') {
+            $where[] = 'f.entry_type = ?';
+            $params[] = $entryType;
+        }
+        if ($pathContains !== '') {
+            $where[] = 'f.relative_path LIKE ?';
+            $params[] = '%' . $pathContains . '%';
+        }
+        if ($nameContains !== '') {
+            $where[] = 'f.name LIKE ?';
+            $params[] = '%' . $nameContains . '%';
+        }
 
-    if ($status === 'categorised') {
-        $matchSql = CategoryMatchSql::matchSql();
-        $where[] = "EXISTS (SELECT 1 FROM ({$matchSql}) cm WHERE cm.file_entry_id = f.id)";
-    } elseif ($status === 'uncategorised') {
-        $matchSql = CategoryMatchSql::matchSql();
-        $where[] = "NOT EXISTS (SELECT 1 FROM ({$matchSql}) cm WHERE cm.file_entry_id = f.id)";
-    } elseif ($status === 'conflicted') {
-        $conflictSql = CategoryMatchSql::activeConflictSql();
-        $where[] = "f.id IN ({$conflictSql})";
+        if ($status === 'categorised') {
+            $matchSql = CategoryMatchSql::matchSql();
+            $where[] = "EXISTS (SELECT 1 FROM ({$matchSql}) cm WHERE cm.file_entry_id = f.id)";
+        } elseif ($status === 'uncategorised') {
+            $matchSql = CategoryMatchSql::matchSql();
+            $where[] = "NOT EXISTS (SELECT 1 FROM ({$matchSql}) cm WHERE cm.file_entry_id = f.id)";
+        } elseif ($status === 'conflicted') {
+            $conflictSql = CategoryMatchSql::activeConflictSql();
+            $where[] = "f.id IN ({$conflictSql})";
+        }
+
+        $whereSql = implode(' AND ', $where);
+        $fetchLimit = $limit + 1;
+        $stmt = db()->prepare("SELECT f.id, f.drive_id, f.relative_path, f.name, f.entry_type, f.extension, f.size_bytes, f.modified_at, d.friendly_name FROM file_entries f JOIN drives d ON d.id = f.drive_id WHERE {$whereSql} ORDER BY d.friendly_name ASC, f.relative_path ASC LIMIT ?");
+        foreach ($params as $index => $value) {
+            $stmt->bindValue($index + 1, $value);
+        }
+        $stmt->bindValue(count($params) + 1, $fetchLimit, PDO::PARAM_INT);
+        $stmt->execute();
+        $rows = $stmt->fetchAll();
+
+        if (count($rows) > $limit) {
+            array_pop($rows);
+            $notice = trim(($notice ? $notice . ' ' : '') . 'More matching rows exist; narrow the filter or increase the limit.');
+        }
+
+        foreach ($rows as $row) {
+            if ($row['entry_type'] === 'file') {
+                $totalFiles++;
+                $totalSize += (int)$row['size_bytes'];
+            } else {
+                $totalFolders++;
+            }
+        }
+        $totalItems = count($rows);
+        $badgeMap = cw_load_badges(array_column($rows, 'id'));
     }
-
-    $whereSql = implode(' AND ', $where);
-
-    $summaryStmt = db()->prepare("SELECT COUNT(*) AS total_items, SUM(f.entry_type = 'file') AS file_count, SUM(f.entry_type = 'folder') AS folder_count, COALESCE(SUM(CASE WHEN f.entry_type = 'file' THEN f.size_bytes ELSE 0 END), 0) AS total_size FROM file_entries f JOIN drives d ON d.id = f.drive_id WHERE {$whereSql}");
-    $summaryStmt->execute($params);
-    $summary = $summaryStmt->fetch() ?: [];
-    $totalItems = (int)($summary['total_items'] ?? 0);
-    $totalFiles = (int)($summary['file_count'] ?? 0);
-    $totalFolders = (int)($summary['folder_count'] ?? 0);
-    $totalSize = (int)($summary['total_size'] ?? 0);
-
-    $stmt = db()->prepare("SELECT f.id, f.drive_id, f.relative_path, f.name, f.entry_type, f.extension, f.size_bytes, f.modified_at, d.friendly_name FROM file_entries f JOIN drives d ON d.id = f.drive_id WHERE {$whereSql} ORDER BY d.friendly_name ASC, f.relative_path ASC LIMIT ?");
-    foreach ($params as $index => $value) {
-        $stmt->bindValue($index + 1, $value);
-    }
-    $stmt->bindValue(count($params) + 1, $limit, PDO::PARAM_INT);
-    $stmt->execute();
-    $rows = $stmt->fetchAll();
-    $badgeMap = cw_load_badges(array_column($rows, 'id'));
 } catch (Throwable $e) {
     $error = trim(($error ? $error . ' | ' : '') . 'Could not load category workflow results: ' . $e->getMessage());
 }
@@ -153,6 +169,7 @@ try {
 render_header('Category Workflow');
 ?>
 <?php if ($error): ?><div class="card"><strong>Error:</strong> <?= e($error) ?></div><?php endif; ?>
+<?php if ($notice): ?><div class="card"><strong>Notice:</strong> <?= e($notice) ?></div><?php endif; ?>
 
 <div class="card">
     <h2>Category Workflow</h2>
@@ -169,7 +186,7 @@ render_header('Category Workflow');
             </label>
             <label>Drive
                 <select name="drive_id">
-                    <option value="0">All drives</option>
+                    <option value="0">Choose a drive</option>
                     <?php foreach ($drives as $drive): ?><option value="<?= e((string)$drive['id']) ?>" <?= $driveId === (int)$drive['id'] ? 'selected' : '' ?>><?= e((string)$drive['friendly_name']) ?></option><?php endforeach; ?>
                 </select>
             </label>
@@ -190,7 +207,7 @@ render_header('Category Workflow');
 
 <div class="card">
     <h2>Results</h2>
-    <p class="muted">Matches: <?= e(number_format($totalItems)) ?> | Files: <?= e(number_format($totalFiles)) ?> | Folders: <?= e(number_format($totalFolders)) ?> | File size: <?= e(format_bytes($totalSize)) ?> | Showing: <?= e(number_format(count($rows))) ?></p>
+    <p class="muted"><?= $totalItems === null ? 'No live scan run yet.' : 'Showing: ' . e(number_format($totalItems)) . ' | Files shown: ' . e(number_format($totalFiles)) . ' | Folders shown: ' . e(number_format($totalFolders)) . ' | Shown file size: ' . e(format_bytes($totalSize)) ?></p>
     <div class="table-scroll">
         <table class="auto-table selectable-table" data-status-target="workflow-status">
             <thead><tr><th>Drive</th><th>Name</th><th>Type</th><th>Category</th><th>Path</th><th>Size</th><th>Modified</th><th>Open</th></tr></thead>
@@ -208,11 +225,11 @@ render_header('Category Workflow');
                         <td><a class="button" href="<?= e($openUrl) ?>">Open</a></td>
                     </tr>
                 <?php endforeach; ?>
-                <?php if (!$rows): ?><tr><td colspan="8">No matching entries found.</td></tr><?php endif; ?>
+                <?php if (!$rows): ?><tr><td colspan="8">No matching entries shown. Select a drive/filter and run the workflow.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>
-    <div class="status-bar" id="workflow-status" data-total-count="<?= e((string)$totalItems) ?>" data-total-size="<?= e((string)$totalSize) ?>" data-file-count="<?= e((string)$totalFiles) ?>" data-folder-count="<?= e((string)$totalFolders) ?>"></div>
+    <div class="status-bar" id="workflow-status" data-total-count="<?= e((string)($totalItems ?? 0)) ?>" data-total-size="<?= e((string)$totalSize) ?>" data-file-count="<?= e((string)$totalFiles) ?>" data-folder-count="<?= e((string)$totalFolders) ?>"></div>
 </div>
 
 <div id="context-menu" class="context-menu"><button type="button" data-context-action="add_category">Add to category</button><button type="button" data-context-action="remove_category">Remove from category</button><hr><button type="button" data-context-action="rename">Rename...</button><button type="button" data-context-action="move">Move...</button><button type="button" data-context-action="delete">Delete...</button></div>
