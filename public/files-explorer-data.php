@@ -19,12 +19,6 @@ function fed_parent(string $path): string
     return implode('/', $parts);
 }
 
-function fed_parent_expr(string $alias = 'f'): string
-{
-    $path = $alias . '.relative_path';
-    return "CASE WHEN LOCATE('/', {$path}) = 0 THEN '' ELSE SUBSTRING({$path}, 1, LENGTH({$path}) - LENGTH(SUBSTRING_INDEX({$path}, '/', -1)) - 1) END";
-}
-
 function fed_link(array $params = []): string
 {
     return 'files.php?' . http_build_query($params) . '#explorer-panel';
@@ -122,7 +116,6 @@ try {
         throw new RuntimeException('Drive not found.');
     }
 
-    $expr = fed_parent_expr('f');
     $visibleSql = IgnoredFolderSql::excludeCondition('f');
     $sortSql = match ($sort) {
         'type' => "CASE WHEN f.entry_type = 'folder' THEN 'Folder' ELSE COALESCE(f.extension, '') END",
@@ -131,7 +124,7 @@ try {
         default => 'f.name',
     };
 
-    $summaryStmt = db()->prepare("SELECT COUNT(*) AS total_items, SUM(f.entry_type = 'file') AS file_count, SUM(f.entry_type = 'folder') AS folder_count, COALESCE(SUM(CASE WHEN f.entry_type = 'file' THEN f.size_bytes ELSE 0 END), 0) AS total_size FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$expr} = ?");
+    $summaryStmt = db()->prepare("SELECT COUNT(*) AS total_items, SUM(f.entry_type = 'file') AS file_count, SUM(f.entry_type = 'folder') AS folder_count, COALESCE(SUM(CASE WHEN f.entry_type = 'file' THEN f.size_bytes ELSE 0 END), 0) AS total_size FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND f.parent_path = ?");
     $summaryStmt->execute([$driveId, $path]);
     $summary = $summaryStmt->fetch() ?: [];
     $totalItems = (int)($summary['total_items'] ?? 0);
@@ -144,7 +137,7 @@ try {
         $offset = ($page - 1) * AJAX_EXPLORER_PAGE_SIZE;
     }
 
-    $stmt = db()->prepare("SELECT f.id, f.relative_path, f.name, f.extension, f.entry_type, f.size_bytes, f.modified_at FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND {$expr} = ? ORDER BY CASE WHEN f.entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, f.name ASC LIMIT ? OFFSET ?");
+    $stmt = db()->prepare("SELECT f.id, f.relative_path, f.name, f.extension, f.entry_type, f.size_bytes, f.modified_at FROM file_entries f WHERE f.drive_id = ? AND f.is_missing = 0 AND {$visibleSql} AND f.parent_path = ? ORDER BY CASE WHEN f.entry_type = 'folder' THEN 0 ELSE 1 END ASC, {$sortSql} {$dir}, f.name ASC LIMIT ? OFFSET ?");
     $stmt->bindValue(1, $driveId, PDO::PARAM_INT);
     $stmt->bindValue(2, $path);
     $stmt->bindValue(3, AJAX_EXPLORER_PAGE_SIZE, PDO::PARAM_INT);
@@ -153,21 +146,21 @@ try {
     $children = $stmt->fetchAll();
     $categoryMap = fed_category_badges(array_column($children, 'id'));
 
-    $breadcrumbs = '<a href="' . e(fed_link(['drive_id' => $driveId, 'path' => '', 'expanded_drive_id' => $driveId, 'explorer_page' => 1])) . '" data-ajax-path="" data-drive-id="' . e((string)$driveId) . '">' . e((string)$drive['friendly_name']) . '</a>';
+    $breadcrumbs = '<a href="' . e(fed_link(['drive_id' => $driveId, 'path' => '', 'explorer_page' => 1])) . '" data-ajax-path="" data-drive-id="' . e((string)$driveId) . '">' . e((string)$drive['friendly_name']) . '</a>';
     $running = '';
     foreach (array_filter(explode('/', $path), static fn(string $v): bool => $v !== '') as $part) {
         $running = $running === '' ? $part : $running . '/' . $part;
-        $breadcrumbs .= ' / <a href="' . e(fed_link(['drive_id' => $driveId, 'path' => $running, 'expanded_drive_id' => $driveId, 'explorer_page' => 1])) . '" data-ajax-path="' . e($running) . '" data-drive-id="' . e((string)$driveId) . '">' . e($part) . '</a>';
+        $breadcrumbs .= ' / <a href="' . e(fed_link(['drive_id' => $driveId, 'path' => $running, 'explorer_page' => 1])) . '" data-ajax-path="' . e($running) . '" data-drive-id="' . e((string)$driveId) . '">' . e($part) . '</a>';
     }
 
     $rows = '';
     if ($path !== '') {
-        $rows .= '<tr class="explorer-row" data-url="' . e(fed_link(['drive_id' => $driveId, 'path' => fed_parent($path), 'expanded_drive_id' => $driveId, 'explorer_page' => 1])) . '" data-ajax-path="' . e(fed_parent($path)) . '" data-drive-id="' . e((string)$driveId) . '"><td>↩ ..</td><td>Folder</td><td></td><td></td><td></td></tr>';
+        $rows .= '<tr class="explorer-row" data-url="' . e(fed_link(['drive_id' => $driveId, 'path' => fed_parent($path), 'explorer_page' => 1])) . '" data-ajax-path="' . e(fed_parent($path)) . '" data-drive-id="' . e((string)$driveId) . '"><td>↩ ..</td><td>Folder</td><td></td><td></td><td></td></tr>';
     }
     foreach ($children as $entry) {
         $entryId = (int)$entry['id'];
         $entryCategory = $categoryMap[$entryId] ?? ['badges' => [], 'row_color' => ''];
-        $entryUrl = $entry['entry_type'] === 'folder' ? fed_link(['drive_id' => $driveId, 'path' => $entry['relative_path'], 'expanded_drive_id' => $driveId, 'selected_entry_id' => null, 'explorer_page' => 1]) : '';
+        $entryUrl = $entry['entry_type'] === 'folder' ? fed_link(['drive_id' => $driveId, 'path' => $entry['relative_path'], 'selected_entry_id' => null, 'explorer_page' => 1]) : '';
         $badges = implode(' ', $entryCategory['badges'] ?? []);
         $rows .= '<tr id="entry-' . e((string)$entryId) . '" class="explorer-row selectable-row"' . fed_row_style((string)($entryCategory['row_color'] ?? '')) . ' data-id="' . e((string)$entryId) . '" data-entry-type="' . e((string)$entry['entry_type']) . '" data-entry-name="' . e((string)$entry['name']) . '" data-url="' . e($entryUrl) . '" data-ajax-path="' . e($entry['entry_type'] === 'folder' ? (string)$entry['relative_path'] : '') . '" data-drive-id="' . e((string)$driveId) . '" data-size="' . e((string)(int)$entry['size_bytes']) . '" data-is-file="' . ($entry['entry_type'] === 'file' ? '1' : '0') . '">';
         $rows .= '<td>' . ($entry['entry_type'] === 'folder' ? '📁' : '📄') . ' ' . e((string)$entry['name']) . '</td><td>' . e($entry['entry_type'] === 'folder' ? 'Folder' : strtoupper((string)$entry['extension']) . ' File') . '</td><td>' . $badges . '</td><td>' . ($entry['entry_type'] === 'file' ? e(format_bytes((int)$entry['size_bytes'])) : '') . '</td><td>' . e((string)$entry['modified_at']) . '</td></tr>';
