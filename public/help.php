@@ -62,7 +62,7 @@ render_header('Help');
         <h2>Category routes</h2>
         <div class="table-scroll"><table class="auto-table compact-table"><thead><tr><th>Path</th><th>Purpose</th><th>Status / notes</th></tr></thead><tbody>
             <tr><td><a href="category-status.php">category-status.php</a></td><td>Category status browser.</td><td>Switch between uncategorised/categorised items and use right-click category actions.</td></tr>
-            <tr><td><a href="category-workflow-summary.php">category-workflow-summary.php</a></td><td>Summary of categorisation progress.</td><td>Useful but can be slower on large data. Filename still old, but page is a status summary.</td></tr>
+            <tr><td><a href="category-status-summary.php">category-status-summary.php</a></td><td>Summary of categorisation progress.</td><td>Useful but can be slower on large data.</td></tr>
             <tr><td><a href="categories.php">categories.php</a></td><td>Create/manage categories and colours.</td><td>Required before assigning/moving.</td></tr>
             <tr><td><a href="category-targets.php">category-targets.php</a></td><td>Map categories to target drives.</td><td>Required before move planning.</td></tr>
             <tr><td><a href="category-preview.php">category-preview.php</a></td><td>Preview category matching.</td><td>Diagnostic/review page.</td></tr>
@@ -113,7 +113,7 @@ render_header('Help');
             <li><strong>setup-admin.php</strong> — likely redundant because <a href="users.php">users.php</a> can create the first account and user management now lives there.</li>
             <li><strong>move-planner.php</strong> — may be partly superseded by <a href="plan-builder.php">plan-builder.php</a> and <a href="move-candidates.php">move-candidates.php</a>. Keep until you confirm no unique features remain.</li>
             <li><strong>category-coverage.php</strong> — previously caused 504s on large data. Keep only if the optimised/current version is genuinely useful.</li>
-            <li><strong>category-workflow-summary.php</strong> — useful but slow on large datasets. Consider renaming later to category-status-summary.php if you want to fully remove the old terminology.</li>
+            <li><strong>category-status-summary.php</strong> — useful but slow on large datasets. Keep as a reporting page if it remains useful.</li>
             <li><strong>move-execution-settings.php</strong> — keep while actual move mode exists; not optional.</li>
             <li><strong>planning-maintenance.php</strong> — admin/maintenance only; keep hidden or admin-only, but do not delete yet.</li>
         </ul>
