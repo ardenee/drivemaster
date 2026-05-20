@@ -22,15 +22,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 render_header('Login');
 ?>
-<?php if ($error): ?><div class="card"><strong>Error:</strong> <?= e($error) ?></div><?php endif; ?>
-<div class="card">
-    <h2>Login</h2>
-    <form method="post">
-        <div class="form-grid">
-            <label>Username <input type="text" name="username" required></label>
-            <label>Access <input type="password" name="access" required></label>
-        </div>
-        <button type="submit">Login</button>
-    </form>
+<div class="auth-shell">
+    <div class="card auth-card">
+        <h2>Sign in</h2>
+        <p class="muted">Enter your DriveMaster user details.</p>
+        <?php if ($error): ?><div class="status-bar"><strong>Error:</strong> <?= e($error) ?></div><?php endif; ?>
+        <form method="post" class="auth-form">
+            <label>Username
+                <input type="text" name="username" required autocomplete="username" autofocus>
+            </label>
+            <label>Access
+                <input type="password" name="access" required autocomplete="current-password">
+            </label>
+            <div class="auth-actions">
+                <button type="submit">Login</button>
+            </div>
+        </form>
+    </div>
 </div>
 <?php render_footer(); ?>
