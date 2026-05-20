@@ -13,9 +13,10 @@
         const main = explorerPanel.querySelector('.explorer-main');
         const breadcrumbs = main ? main.querySelector('.breadcrumbs') : null;
         const table = main ? main.querySelector('.explorer-table') : null;
+        const theadRow = table ? table.querySelector('thead tr') : null;
         const tbody = table ? table.querySelector('tbody') : null;
         const status = document.getElementById('category-status-bar');
-        if (!main || !breadcrumbs || !table || !tbody || !status) {
+        if (!main || !breadcrumbs || !table || !theadRow || !tbody || !status) {
             return;
         }
 
@@ -87,6 +88,21 @@
             url.searchParams.delete('selected_entry_id');
             url.hash = 'category-status-explorer';
             return url;
+        }
+
+        function buildSortHeader(key, label) {
+            const nextDir = currentSort === key && currentDir === 'asc' ? 'desc' : 'asc';
+            const suffix = currentSort === key ? (currentDir === 'asc' ? ' ▲' : ' ▼') : '';
+            const url = currentStatusUrl(currentDriveId, currentPath, 1, key, nextDir, currentMode);
+            return '<th><a href="' + url.toString() + '">' + label + suffix + '</a></th>';
+        }
+
+        function updateHeader() {
+            const columns = currentMode === 'assigned'
+                ? [['name', 'Name'], ['type', 'Type'], ['category', 'Category'], ['size', 'Size'], ['modified', 'Modified']]
+                : [['name', 'Name'], ['type', 'Type'], ['size', 'Size'], ['modified', 'Modified']];
+            theadRow.innerHTML = columns.map(function (column) { return buildSortHeader(column[0], column[1]); }).join('');
+            wireHeaderLinks();
         }
 
         function syncReturnUrl(driveId, path, page, sort, dir, mode) {
@@ -273,6 +289,9 @@
             sort = sort || 'name';
             dir = dir || 'asc';
             mode = mode === 'assigned' ? 'assigned' : 'unassigned';
+            if (mode === 'unassigned' && sort === 'category') {
+                sort = 'name';
+            }
             if (!driveId) {
                 return;
             }
@@ -284,6 +303,7 @@
             currentDir = dir;
             currentMode = mode;
             syncReturnUrl(currentDriveId, currentPath, currentPage, currentSort, currentDir, currentMode);
+            updateHeader();
             selectTreeRow(driveId, path);
             if (loading) {
                 queuedLoad = { driveId: driveId, path: path, page: page, sort: sort, dir: dir, mode: mode, pushState: false, message: 'Loading requested category status folder next...' };
@@ -310,8 +330,9 @@
                     currentPage = Number(data.page || page || 1);
                     currentSort = sort;
                     currentDir = dir;
-                    currentMode = data.mode === 'assigned' ? 'assigned' : mode;
+                    currentMode = data.mode === 'assigned' ? 'assigned' : 'unassigned';
                     syncReturnUrl(currentDriveId, currentPath, currentPage, currentSort, currentDir, currentMode);
+                    updateHeader();
                     breadcrumbs.innerHTML = data.breadcrumbs_html || '';
                     tbody.innerHTML = data.rows_html || '';
                     main.querySelectorAll('.status-explorer-pager').forEach(function (pager) { pager.remove(); });
@@ -437,16 +458,18 @@
             event.preventDefault();
         }, true);
 
-        table.querySelectorAll('thead a').forEach(function (link) {
-            link.addEventListener('click', function (event) {
-                const url = new URL(link.href, window.location.href);
-                const sort = url.searchParams.get('sort') || 'name';
-                const dir = url.searchParams.get('dir') || 'asc';
-                const mode = url.searchParams.get('mode') === 'assigned' ? 'assigned' : currentMode;
-                event.preventDefault();
-                loadStatus(currentDriveId, currentPath, 1, sort, dir, mode, true, 'Sorting category status entries...');
+        function wireHeaderLinks() {
+            table.querySelectorAll('thead a').forEach(function (link) {
+                link.addEventListener('click', function (event) {
+                    const url = new URL(link.href, window.location.href);
+                    const sort = url.searchParams.get('sort') || 'name';
+                    const dir = url.searchParams.get('dir') || 'asc';
+                    const mode = url.searchParams.get('mode') === 'assigned' ? 'assigned' : 'unassigned';
+                    event.preventDefault();
+                    loadStatus(currentDriveId, currentPath, 1, sort, dir, mode, true, 'Sorting category status entries...');
+                });
             });
-        });
+        }
 
         window.addEventListener('popstate', function (event) {
             const state = event.state;
@@ -456,6 +479,7 @@
         });
 
         wireNewRows();
+        wireHeaderLinks();
         updateUrl(currentDriveId, currentPath, currentPage, currentSort, currentDir, currentMode, false);
         syncTreeToPath(currentDriveId, currentPath);
     }
