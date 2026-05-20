@@ -11,7 +11,7 @@ render_header('Help');
     <div class="page-heading">
         <div>
             <h2>DriveMaster Help</h2>
-            <p class="muted">Usage guide, workflow order, and route reference for the current application.</p>
+            <p class="muted">Usage guide, process order, and route reference for the current application.</p>
         </div>
         <div class="status-bar">Recommended order: scan → categorise → plan → dry-run → simulate → move</div>
     </div>
@@ -19,7 +19,7 @@ render_header('Help');
     <div class="card">
         <h2>What DriveMaster does</h2>
         <p>DriveMaster scans drives, stores a searchable inventory of files/folders, lets you assign categories, maps categories to target drives, builds safe move plans, validates those plans, performs dry-runs, prepares execution records, simulates execution, and can optionally perform guarded file moves.</p>
-        <p><strong>Important:</strong> do not enable actual moves until the full workflow has been tested on a tiny disposable folder.</p>
+        <p><strong>Important:</strong> do not enable actual moves until the full process has been tested on a tiny disposable folder.</p>
     </div>
 
     <div class="card">
@@ -29,7 +29,8 @@ render_header('Help');
             <li><strong>Review inventory:</strong> use <a href="files.php">Files</a> to browse scanned files and folders.</li>
             <li><strong>Configure ignored folders:</strong> use <a href="ignored-folders.php">Ignored Folders</a> for folders that should be ignored by duplicate/category logic.</li>
             <li><strong>Create categories:</strong> use <a href="categories.php">Manage Categories</a>.</li>
-            <li><strong>Assign categories:</strong> use <a href="category-workflow.php">Category Workflow</a> to visually work through uncategorised folders/files.</li>
+            <li><strong>Check category status:</strong> use <a href="category-status.php">Category Status</a> to switch between uncategorised and categorised files/folders.</li>
+            <li><strong>Assign categories:</strong> use the right-click actions in <a href="category-status.php">Category Status</a>.</li>
             <li><strong>Set target drives:</strong> use <a href="category-targets.php">Target Drives</a> to tell each category where it should move.</li>
             <li><strong>Review safe candidates:</strong> use <a href="move-candidates.php">Move Candidates</a>.</li>
             <li><strong>Build a saved plan:</strong> use <a href="plan-builder.php">Plan Builder</a>. This stores a snapshot; no files move.</li>
@@ -53,21 +54,24 @@ render_header('Help');
             <tr><td><a href="ignored-folders.php">ignored-folders.php</a></td><td>Ignored folder names/rules.</td><td>Excluding noise folders such as metadata/cache folders.</td></tr>
             <tr><td><a href="errors.php">errors.php</a></td><td>Error list.</td><td>Reviewing scan/app errors.</td></tr>
             <tr><td><a href="health.php">health.php</a></td><td>Health/status checks.</td><td>Checking app/database state.</td></tr>
-            <tr><td><a href="help.php">help.php</a></td><td>This help page.</td><td>Finding the correct workflow/page.</td></tr>
+            <tr><td><a href="help.php">help.php</a></td><td>This help page.</td><td>Finding the correct process/page.</td></tr>
         </tbody></table></div>
     </div>
 
     <div class="card">
         <h2>Category routes</h2>
         <div class="table-scroll"><table class="auto-table compact-table"><thead><tr><th>Path</th><th>Purpose</th><th>Status / notes</th></tr></thead><tbody>
-            <tr><td><a href="category-workflow.php">category-workflow.php</a></td><td>Main visual categorisation workflow.</td><td>Primary category working page.</td></tr>
-            <tr><td><a href="category-workflow-summary.php">category-workflow-summary.php</a></td><td>Summary of workflow/categorisation progress.</td><td>Useful but can be slower on large data.</td></tr>
+            <tr><td><a href="category-status.php">category-status.php</a></td><td>Category status browser.</td><td>Switch between uncategorised/categorised items and use right-click category actions.</td></tr>
+            <tr><td><a href="category-workflow-summary.php">category-workflow-summary.php</a></td><td>Summary of categorisation progress.</td><td>Useful but can be slower on large data. Filename still old, but page is a status summary.</td></tr>
             <tr><td><a href="categories.php">categories.php</a></td><td>Create/manage categories and colours.</td><td>Required before assigning/moving.</td></tr>
             <tr><td><a href="category-targets.php">category-targets.php</a></td><td>Map categories to target drives.</td><td>Required before move planning.</td></tr>
             <tr><td><a href="category-preview.php">category-preview.php</a></td><td>Preview category matching.</td><td>Diagnostic/review page.</td></tr>
             <tr><td><a href="category-coverage.php">category-coverage.php</a></td><td>Coverage report.</td><td>May be expensive on large databases; use sparingly.</td></tr>
             <tr><td><a href="category-conflicts.php">category-conflicts.php</a></td><td>Category conflict review.</td><td>Required to keep unsafe moves blocked.</td></tr>
             <tr><td><a href="category-drive-usage.php">category-drive-usage.php</a></td><td>Drive usage by category/target.</td><td>Planning aid.</td></tr>
+            <tr><td>category-status-data.php</td><td>AJAX endpoint for Category Status table.</td><td>Internal route used by category-status.php.</td></tr>
+            <tr><td>category-status-tree-children.php</td><td>AJAX endpoint for lazy tree children.</td><td>Internal route used by category-status.php.</td></tr>
+            <tr><td>category-status-tree-branch.php</td><td>AJAX endpoint for tree branch sync.</td><td>Internal route used by category-status.php.</td></tr>
         </tbody></table></div>
     </div>
 
@@ -104,12 +108,12 @@ render_header('Help');
 
     <div class="card danger-zone">
         <h2>Code review: pages that may not be needed long-term</h2>
-        <p class="muted">Do not delete these until the current workflow has been tested. These are candidates for consolidation, not confirmed safe deletions.</p>
+        <p class="muted">Do not delete these until the current process has been tested. These are candidates for consolidation, not confirmed safe deletions.</p>
         <ul>
             <li><strong>setup-admin.php</strong> — likely redundant because <a href="users.php">users.php</a> can create the first account and user management now lives there.</li>
             <li><strong>move-planner.php</strong> — may be partly superseded by <a href="plan-builder.php">plan-builder.php</a> and <a href="move-candidates.php">move-candidates.php</a>. Keep until you confirm no unique features remain.</li>
             <li><strong>category-coverage.php</strong> — previously caused 504s on large data. Keep only if the optimised/current version is genuinely useful.</li>
-            <li><strong>category-workflow-summary.php</strong> — useful but slow on large datasets. Consider keeping as a report, not part of the normal workflow.</li>
+            <li><strong>category-workflow-summary.php</strong> — useful but slow on large datasets. Consider renaming later to category-status-summary.php if you want to fully remove the old terminology.</li>
             <li><strong>move-execution-settings.php</strong> — keep while actual move mode exists; not optional.</li>
             <li><strong>planning-maintenance.php</strong> — admin/maintenance only; keep hidden or admin-only, but do not delete yet.</li>
         </ul>
