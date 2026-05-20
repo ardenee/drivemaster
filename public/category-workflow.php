@@ -5,7 +5,6 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 require __DIR__ . '/_layout.php';
 
-use DriveMaster\Support\CategoryMatchSql;
 use DriveMaster\Support\IgnoredFolderSql;
 
 const CATEGORY_WORKFLOW_LIMIT_MAX = 1000;
@@ -19,10 +18,15 @@ function cw_parent(string $path): string
     return substr($path, 0, strrpos($path, '/')) ?: '';
 }
 
+function cw_manual_match_sql(string $alias = 'f'): string
+{
+    return "EXISTS (SELECT 1 FROM category_manual_assignments cma WHERE cma.file_entry_id = {$alias}.id OR (cma.assignment_type = 'folder' AND cma.drive_id = {$alias}.drive_id AND cma.path_prefix IS NOT NULL AND ({$alias}.relative_path = cma.path_prefix OR {$alias}.relative_path LIKE CONCAT(cma.path_prefix, '/%'))))";
+}
+
 function cw_badges(array $map, int $entryId): string
 {
     if (empty($map[$entryId])) {
-        return '<span class="muted">Uncategorised</span>';
+        return '<span class="muted">No manual category</span>';
     }
 
     $out = '';
@@ -35,13 +39,12 @@ function cw_badges(array $map, int $entryId): string
             $b = hexdec(substr($hex, 5, 2));
             $style = ' style="background-color: rgba(' . $r . ',' . $g . ',' . $b . ',0.55); border-color: rgba(' . $r . ',' . $g . ',' . $b . ',0.85);"';
         }
-        $source = ((int)$row['is_manual'] === 1 && (int)$row['is_rule'] === 1) ? 'manual + rule' : (((int)$row['is_manual'] === 1) ? 'manual' : 'rule');
-        $out .= '<span class="category-badge" title="' . e($source) . '"' . $style . '>' . e((string)$row['category_name']) . '</span> ';
+        $out .= '<span class="category-badge" title="manual"' . $style . '>' . e((string)$row['category_name']) . '</span> ';
     }
     return trim($out);
 }
 
-function cw_load_badges(array $entryIds): array
+function cw_load_manual_badges(array $entryIds): array
 {
     $entryIds = array_values(array_unique(array_filter(array_map('intval', $entryIds), static fn(int $id): bool => $id > 0)));
     if (!$entryIds) {
@@ -49,8 +52,18 @@ function cw_load_badges(array $entryIds): array
     }
 
     $placeholders = implode(',', array_fill(0, count($entryIds), '?'));
-    $matchSql = CategoryMatchSql::matchSql();
-    $stmt = db()->prepare("SELECT cm.file_entry_id, cm.category_name, cm.color_hex, cm.is_manual, cm.is_rule FROM ({$matchSql}) cm WHERE cm.file_entry_id IN ({$placeholders}) ORDER BY cm.category_name");
+    $visibleSql = IgnoredFolderSql::excludeCondition('f');
+    $sql = "
+        SELECT f.id AS file_entry_id, c.name AS category_name, c.color_hex
+        FROM file_entries f
+        JOIN category_manual_assignments cma ON cma.category_id IS NOT NULL
+        JOIN categories c ON c.id = cma.category_id AND c.is_active = 1
+        WHERE f.id IN ({$placeholders})
+        AND {$visibleSql}
+        AND (cma.file_entry_id = f.id OR (cma.assignment_type = 'folder' AND cma.drive_id = f.drive_id AND cma.path_prefix IS NOT NULL AND (f.relative_path = cma.path_prefix OR f.relative_path LIKE CONCAT(cma.path_prefix, '/%'))))
+        ORDER BY c.name
+    ";
+    $stmt = db()->prepare($sql);
     $stmt->execute($entryIds);
 
     $map = [];
@@ -84,7 +97,7 @@ try {
 }
 
 $status = (string)($_GET['status'] ?? 'uncategorised');
-if (!in_array($status, ['any', 'categorised', 'uncategorised', 'conflicted'], true)) {
+if (!in_array($status, ['any', 'categorised', 'uncategorised'], true)) {
     $status = 'uncategorised';
 }
 $driveId = max(0, (int)($_GET['drive_id'] ?? 0));
@@ -95,23 +108,19 @@ if (!in_array($entryType, ['any', 'file', 'folder'], true)) {
 $pathContains = trim((string)($_GET['path_contains'] ?? ''));
 $nameContains = trim((string)($_GET['name_contains'] ?? ''));
 $limit = max(1, min(CATEGORY_WORKFLOW_LIMIT_MAX, (int)($_GET['limit'] ?? 500)));
-$requiresDrive = in_array($status, ['categorised', 'uncategorised', 'conflicted'], true);
-$canRun = !$requiresDrive || $driveId > 0;
+$canRun = $driveId > 0;
 
 if (!$canRun) {
-    $notice = 'Select a drive to review categorised, uncategorised, or conflicted items. This avoids scanning every file on every drive in one request.';
+    $notice = 'Select a drive to review manual category assignments. This page uses manual assignments only so it stays fast; rule-based previews remain available from Category Preview.';
 }
 
 try {
     if ($canRun) {
         $visibleSql = IgnoredFolderSql::excludeCondition('f');
-        $where = ['f.is_missing = 0', $visibleSql];
-        $params = [];
+        $manualSql = cw_manual_match_sql('f');
+        $where = ['f.is_missing = 0', $visibleSql, 'f.drive_id = ?'];
+        $params = [$driveId];
 
-        if ($driveId > 0) {
-            $where[] = 'f.drive_id = ?';
-            $params[] = $driveId;
-        }
         if ($entryType !== 'any') {
             $where[] = 'f.entry_type = ?';
             $params[] = $entryType;
@@ -126,19 +135,14 @@ try {
         }
 
         if ($status === 'categorised') {
-            $matchSql = CategoryMatchSql::matchSql();
-            $where[] = "EXISTS (SELECT 1 FROM ({$matchSql}) cm WHERE cm.file_entry_id = f.id)";
+            $where[] = $manualSql;
         } elseif ($status === 'uncategorised') {
-            $matchSql = CategoryMatchSql::matchSql();
-            $where[] = "NOT EXISTS (SELECT 1 FROM ({$matchSql}) cm WHERE cm.file_entry_id = f.id)";
-        } elseif ($status === 'conflicted') {
-            $conflictSql = CategoryMatchSql::activeConflictSql();
-            $where[] = "f.id IN ({$conflictSql})";
+            $where[] = "NOT {$manualSql}";
         }
 
         $whereSql = implode(' AND ', $where);
         $fetchLimit = $limit + 1;
-        $stmt = db()->prepare("SELECT f.id, f.drive_id, f.relative_path, f.name, f.entry_type, f.extension, f.size_bytes, f.modified_at, d.friendly_name FROM file_entries f JOIN drives d ON d.id = f.drive_id WHERE {$whereSql} ORDER BY d.friendly_name ASC, f.relative_path ASC LIMIT ?");
+        $stmt = db()->prepare("SELECT f.id, f.drive_id, f.relative_path, f.name, f.entry_type, f.extension, f.size_bytes, f.modified_at, d.friendly_name FROM file_entries f JOIN drives d ON d.id = f.drive_id WHERE {$whereSql} ORDER BY f.relative_path ASC LIMIT ?");
         foreach ($params as $index => $value) {
             $stmt->bindValue($index + 1, $value);
         }
@@ -160,7 +164,7 @@ try {
             }
         }
         $totalItems = count($rows);
-        $badgeMap = cw_load_badges(array_column($rows, 'id'));
+        $badgeMap = cw_load_manual_badges(array_column($rows, 'id'));
     }
 } catch (Throwable $e) {
     $error = trim(($error ? $error . ' | ' : '') . 'Could not load category workflow results: ' . $e->getMessage());
@@ -173,15 +177,14 @@ render_header('Category Workflow');
 
 <div class="card">
     <h2>Category Workflow</h2>
-    <p class="muted">Use this page to find files and folders that still need category assignment. Right-click one or more rows to add/remove a category.</p>
+    <p class="muted">Fast manual-review page. Use this to find items that do or do not have a manual category assignment. Right-click one or more rows to add/remove a category. Rule-based category checks are intentionally not calculated here.</p>
     <form method="get">
         <div class="form-grid compact-search">
             <label>Status
                 <select name="status">
-                    <option value="any" <?= $status === 'any' ? 'selected' : '' ?>>Any</option>
-                    <option value="categorised" <?= $status === 'categorised' ? 'selected' : '' ?>>Categorised</option>
-                    <option value="uncategorised" <?= $status === 'uncategorised' ? 'selected' : '' ?>>Uncategorised</option>
-                    <option value="conflicted" <?= $status === 'conflicted' ? 'selected' : '' ?>>Conflicted</option>
+                    <option value="any" <?= $status === 'any' ? 'selected' : '' ?>>Any manual status</option>
+                    <option value="categorised" <?= $status === 'categorised' ? 'selected' : '' ?>>Has manual category</option>
+                    <option value="uncategorised" <?= $status === 'uncategorised' ? 'selected' : '' ?>>No manual category</option>
                 </select>
             </label>
             <label>Drive
@@ -210,7 +213,7 @@ render_header('Category Workflow');
     <p class="muted"><?= $totalItems === null ? 'No live scan run yet.' : 'Showing: ' . e(number_format($totalItems)) . ' | Files shown: ' . e(number_format($totalFiles)) . ' | Folders shown: ' . e(number_format($totalFolders)) . ' | Shown file size: ' . e(format_bytes($totalSize)) ?></p>
     <div class="table-scroll">
         <table class="auto-table selectable-table" data-status-target="workflow-status">
-            <thead><tr><th>Drive</th><th>Name</th><th>Type</th><th>Category</th><th>Path</th><th>Size</th><th>Modified</th><th>Open</th></tr></thead>
+            <thead><tr><th>Drive</th><th>Name</th><th>Type</th><th>Manual category</th><th>Path</th><th>Size</th><th>Modified</th><th>Open</th></tr></thead>
             <tbody>
                 <?php foreach ($rows as $row): ?>
                     <?php $openUrl = 'files.php?' . http_build_query(['drive_id' => (int)$row['drive_id'], 'path' => cw_parent((string)$row['relative_path']), 'selected_entry_id' => (int)$row['id'], 'explorer_page' => 1]) . '#explorer-panel'; ?>
