@@ -62,11 +62,11 @@ final class CategoryWorkflowRepository
         $offset = ($page - 1) * $pageSize;
         $dir = strtolower($dir) === 'desc' ? 'desc' : 'asc';
         $sortSql = match ($sort) {
-            'type' => "CASE WHEN f.entry_type = 'folder' THEN 'Folder' ELSE COALESCE(f.extension, '') END",
-            'category' => 'category_name',
-            'size' => 'f.size_bytes',
-            'modified' => 'f.modified_at',
-            default => 'f.name',
+            'type' => "CASE WHEN q.entry_type = 'folder' THEN 'Folder' ELSE COALESCE(q.extension, '') END",
+            'category' => 'q.category_name',
+            'size' => 'q.size_bytes',
+            'modified' => 'q.modified_at',
+            default => 'q.name',
         };
         $visibleSql = IgnoredFolderSql::excludeCondition('f');
         $categorySql = $this->categoryFilterSql($mode, 'f');
