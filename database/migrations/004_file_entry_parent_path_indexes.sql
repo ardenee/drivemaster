@@ -5,7 +5,7 @@ SET parent_path = CASE
 END;
 
 CREATE INDEX idx_file_entries_drive_parent_type_name
-ON file_entries (drive_id, parent_path(700), entry_type, name);
+ON file_entries (drive_id, parent_path(255), entry_type, name(191));
 
 CREATE INDEX idx_file_entries_drive_parent_modified
 ON file_entries (drive_id, parent_path(700), modified_at);
