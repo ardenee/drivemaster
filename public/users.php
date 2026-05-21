@@ -149,7 +149,7 @@ render_header('Users');
 
         <div class="card admin-card">
             <h2>Existing users</h2>
-            <p class="muted">The default admin account is protected and cannot be demoted, disabled, or deleted.</p>
+            <p class="muted">The default admin account is protected and cannot be demoted, disabled, or deleted. Use Edit to update username/display name or reset access value.</p>
             <div class="table-scroll">
                 <table class="auto-table compact-table">
                     <thead><tr><th>User</th><th>Role</th><th>Status</th><th>Last login</th><th>Created</th><th>Actions</th></tr></thead>
@@ -163,15 +163,16 @@ render_header('Users');
                             <td><?= e($user['last_login_at'] ?? 'Never') ?></td>
                             <td><?= e($user['created_at']) ?></td>
                             <td>
-                                <?php if (!$isDefaultAdmin): ?>
-                                    <div class="table-actions">
+                                <div class="table-actions">
+                                    <a class="button" href="user-edit.php?id=<?= e((string)$user['id']) ?>">Edit</a>
+                                    <?php if (!$isDefaultAdmin): ?>
                                         <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><button type="submit"><?= (int)$user['is_active'] === 1 ? 'Disable' : 'Enable' ?></button></form>
                                         <form method="post"><input type="hidden" name="action" value="role"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><input type="hidden" name="role" value="<?= $user['role'] === 'admin' ? 'user' : 'admin' ?>"><button type="submit">Make <?= $user['role'] === 'admin' ? 'User' : 'Admin' ?></button></form>
                                         <form method="post" onsubmit="return confirm('Delete this user?');"><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?= e((string)$user['id']) ?>"><button class="danger" type="submit">Delete</button></form>
-                                    </div>
-                                <?php else: ?>
-                                    <span class="muted">Protected</span>
-                                <?php endif; ?>
+                                    <?php else: ?>
+                                        <span class="muted">Protected role/status</span>
+                                    <?php endif; ?>
+                                </div>
                             </td>
                         </tr>
                     <?php endforeach; ?>
