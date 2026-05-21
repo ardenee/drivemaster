@@ -2,6 +2,7 @@
 
 function render_header(string $title): void
 {
+    $currentUser = current_user();
     ?>
     <!doctype html>
     <html lang="en">
@@ -52,9 +53,17 @@ function render_header(string $title): void
                 <a href="planning-maintenance.php">Maintenance</a>
             </span>
         </span>
-        <a href="users.php">Users</a>
-        <a href="login.php">Login</a>
-        <a href="logout.php">Logout</a>
+        <span class="nav-dropdown">
+            <button type="button" class="nav-dropdown-button">Users ▾</button>
+            <span class="nav-dropdown-menu">
+                <a href="users.php">User Management</a>
+                <?php if ($currentUser): ?>
+                    <a href="logout.php">Logout</a>
+                <?php else: ?>
+                    <a href="login.php">Login</a>
+                <?php endif; ?>
+            </span>
+        </span>
         <a href="help.php">Help</a>
         <a href="errors.php">Errors</a>
         <a href="health.php">Health</a>
