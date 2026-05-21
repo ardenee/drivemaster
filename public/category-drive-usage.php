@@ -53,109 +53,139 @@ if (!in_array($source, ['both', 'manual', 'rules'], true)) {
     $source = 'both';
 }
 $includeAccepted = isset($_GET['include_accepted']) ? 1 : 0;
+$runScan = (string)($_GET['run'] ?? '') === '1';
+$showUncategorised = isset($_GET['show_uncategorised']) ? 1 : 0;
+$error = null;
+$notice = null;
+$usageRows = [];
+$uncategorisedRows = [];
 
-$categories = db()->query('SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name')->fetchAll();
-$drives = db()->query('SELECT id, friendly_name FROM drives WHERE is_active = 1 ORDER BY friendly_name')->fetchAll();
-$matchSql = cdu_match_sql();
-
-$where = ['1=1'];
-$params = [];
-if ($categoryId > 0) {
-    $where[] = 'm.category_id = ?';
-    $params[] = $categoryId;
+try {
+    $categories = db()->query('SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name')->fetchAll();
+    $drives = db()->query('SELECT id, friendly_name FROM drives WHERE is_active = 1 ORDER BY friendly_name')->fetchAll();
+} catch (Throwable $e) {
+    $categories = [];
+    $drives = [];
+    $error = 'Could not load filter data: ' . $e->getMessage();
 }
-if ($driveId > 0) {
-    $where[] = 'm.drive_id = ?';
-    $params[] = $driveId;
-}
-if ($source === 'manual') {
-    $where[] = 'm.is_manual = 1';
-} elseif ($source === 'rules') {
-    $where[] = 'm.is_rule = 1';
-}
-$whereSql = implode(' AND ', $where);
 
-$activeConflictSql = "
-    SELECT x.file_entry_id
-    FROM (
-        SELECT file_entry_id
-        FROM ({$matchSql}) cm
-        GROUP BY file_entry_id
-        HAVING COUNT(DISTINCT category_id) > 1
-    ) x
-    LEFT JOIN category_conflict_ignores cci ON cci.file_entry_id = x.file_entry_id
-    WHERE cci.id IS NULL
-";
+$hasNarrowFilter = $categoryId > 0 || $driveId > 0 || $source !== 'both';
+if (!$runScan) {
+    $notice = 'Choose a category or drive, then click Run usage check. This page no longer scans the full inventory on initial load.';
+} elseif (!$hasNarrowFilter) {
+    $notice = 'Select at least one narrowing filter before running the usage check. Start with one drive or one category to avoid a timeout.';
+} else {
+    try {
+        $matchSql = cdu_match_sql();
+        $where = ['1=1'];
+        $params = [];
+        if ($categoryId > 0) {
+            $where[] = 'm.category_id = ?';
+            $params[] = $categoryId;
+        }
+        if ($driveId > 0) {
+            $where[] = 'm.drive_id = ?';
+            $params[] = $driveId;
+        }
+        if ($source === 'manual') {
+            $where[] = 'm.is_manual = 1';
+        } elseif ($source === 'rules') {
+            $where[] = 'm.is_rule = 1';
+        }
+        $whereSql = implode(' AND ', $where);
 
-$acceptedConflictSql = "
-    SELECT x.file_entry_id
-    FROM (
-        SELECT file_entry_id
-        FROM ({$matchSql}) cm
-        GROUP BY file_entry_id
-        HAVING COUNT(DISTINCT category_id) > 1
-    ) x
-    JOIN category_conflict_ignores cci ON cci.file_entry_id = x.file_entry_id
-";
+        $activeConflictSql = "
+            SELECT x.file_entry_id
+            FROM (
+                SELECT file_entry_id
+                FROM ({$matchSql}) cm
+                GROUP BY file_entry_id
+                HAVING COUNT(DISTINCT category_id) > 1
+            ) x
+            LEFT JOIN category_conflict_ignores cci ON cci.file_entry_id = x.file_entry_id
+            WHERE cci.id IS NULL
+        ";
 
-$usageSql = "
-    SELECT m.category_id, m.category_name, m.color_hex, d.id AS drive_id, d.friendly_name,
-        COUNT(m.file_entry_id) AS item_count,
-        COALESCE(SUM(m.entry_type = 'file'), 0) AS file_count,
-        COALESCE(SUM(m.entry_type = 'folder'), 0) AS folder_count,
-        COALESCE(SUM(CASE WHEN m.entry_type = 'file' THEN m.size_bytes ELSE 0 END), 0) AS total_size,
-        COALESCE(SUM(m.is_manual = 1), 0) AS manual_count,
-        COALESCE(SUM(m.is_rule = 1), 0) AS rule_count,
-        COALESCE(SUM(m.is_manual = 1 AND m.is_rule = 1), 0) AS both_count,
-        COALESCE(SUM(CASE WHEN ac.file_entry_id IS NOT NULL AND m.entry_type = 'file' THEN m.size_bytes ELSE 0 END), 0) AS active_conflict_size,
-        COALESCE(SUM(CASE WHEN ic.file_entry_id IS NOT NULL AND m.entry_type = 'file' THEN m.size_bytes ELSE 0 END), 0) AS accepted_conflict_size,
-        COALESCE(SUM(CASE WHEN ac.file_entry_id IS NULL AND (ic.file_entry_id IS NULL OR ? = 1) AND m.entry_type = 'file' THEN m.size_bytes ELSE 0 END), 0) AS planner_eligible_size
-    FROM ({$matchSql}) m
-    JOIN drives d ON d.id = m.drive_id
-    LEFT JOIN ({$activeConflictSql}) ac ON ac.file_entry_id = m.file_entry_id
-    LEFT JOIN ({$acceptedConflictSql}) ic ON ic.file_entry_id = m.file_entry_id
-    WHERE {$whereSql}
-    GROUP BY m.category_id, m.category_name, m.color_hex, d.id, d.friendly_name
-    ORDER BY m.category_name, d.friendly_name
-";
-$stmt = db()->prepare($usageSql);
-$stmt->bindValue(1, $includeAccepted, PDO::PARAM_INT);
-foreach ($params as $index => $value) {
-    $stmt->bindValue($index + 2, $value);
+        $acceptedConflictSql = "
+            SELECT x.file_entry_id
+            FROM (
+                SELECT file_entry_id
+                FROM ({$matchSql}) cm
+                GROUP BY file_entry_id
+                HAVING COUNT(DISTINCT category_id) > 1
+            ) x
+            JOIN category_conflict_ignores cci ON cci.file_entry_id = x.file_entry_id
+        ";
+
+        $usageSql = "
+            SELECT m.category_id, m.category_name, m.color_hex, d.id AS drive_id, d.friendly_name,
+                COUNT(m.file_entry_id) AS item_count,
+                COALESCE(SUM(m.entry_type = 'file'), 0) AS file_count,
+                COALESCE(SUM(m.entry_type = 'folder'), 0) AS folder_count,
+                COALESCE(SUM(CASE WHEN m.entry_type = 'file' THEN m.size_bytes ELSE 0 END), 0) AS total_size,
+                COALESCE(SUM(m.is_manual = 1), 0) AS manual_count,
+                COALESCE(SUM(m.is_rule = 1), 0) AS rule_count,
+                COALESCE(SUM(m.is_manual = 1 AND m.is_rule = 1), 0) AS both_count,
+                COALESCE(SUM(CASE WHEN ac.file_entry_id IS NOT NULL AND m.entry_type = 'file' THEN m.size_bytes ELSE 0 END), 0) AS active_conflict_size,
+                COALESCE(SUM(CASE WHEN ic.file_entry_id IS NOT NULL AND m.entry_type = 'file' THEN m.size_bytes ELSE 0 END), 0) AS accepted_conflict_size,
+                COALESCE(SUM(CASE WHEN ac.file_entry_id IS NULL AND (ic.file_entry_id IS NULL OR ? = 1) AND m.entry_type = 'file' THEN m.size_bytes ELSE 0 END), 0) AS planner_eligible_size
+            FROM ({$matchSql}) m
+            JOIN drives d ON d.id = m.drive_id
+            LEFT JOIN ({$activeConflictSql}) ac ON ac.file_entry_id = m.file_entry_id
+            LEFT JOIN ({$acceptedConflictSql}) ic ON ic.file_entry_id = m.file_entry_id
+            WHERE {$whereSql}
+            GROUP BY m.category_id, m.category_name, m.color_hex, d.id, d.friendly_name
+            ORDER BY m.category_name, d.friendly_name
+            LIMIT 500
+        ";
+        $stmt = db()->prepare($usageSql);
+        $stmt->bindValue(1, $includeAccepted, PDO::PARAM_INT);
+        foreach ($params as $index => $value) {
+            $stmt->bindValue($index + 2, $value);
+        }
+        $stmt->execute();
+        $usageRows = $stmt->fetchAll();
+
+        if ($showUncategorised) {
+            $uncatWhere = ['f.is_missing = 0'];
+            $uncatParams = [];
+            if ($driveId > 0) {
+                $uncatWhere[] = 'f.drive_id = ?';
+                $uncatParams[] = $driveId;
+            }
+            $uncatWhereSql = implode(' AND ', $uncatWhere);
+            $uncategorisedSql = "
+                SELECT d.id AS drive_id, d.friendly_name,
+                    COUNT(f.id) AS item_count,
+                    COALESCE(SUM(f.entry_type = 'file'), 0) AS file_count,
+                    COALESCE(SUM(f.entry_type = 'folder'), 0) AS folder_count,
+                    COALESCE(SUM(CASE WHEN f.entry_type = 'file' THEN f.size_bytes ELSE 0 END), 0) AS total_size
+                FROM file_entries f
+                JOIN drives d ON d.id = f.drive_id
+                WHERE {$uncatWhereSql}
+                AND NOT EXISTS (SELECT 1 FROM ({$matchSql}) m WHERE m.file_entry_id = f.id)
+                GROUP BY d.id, d.friendly_name
+                ORDER BY d.friendly_name
+                LIMIT 100
+            ";
+            $stmt = db()->prepare($uncategorisedSql);
+            $stmt->execute($uncatParams);
+            $uncategorisedRows = $stmt->fetchAll();
+        }
+    } catch (Throwable $e) {
+        $error = trim(($error ? $error . ' | ' : '') . 'Usage check failed: ' . $e->getMessage());
+    }
 }
-$stmt->execute();
-$usageRows = $stmt->fetchAll();
-
-$uncatWhere = ['f.is_missing = 0'];
-$uncatParams = [];
-if ($driveId > 0) {
-    $uncatWhere[] = 'f.drive_id = ?';
-    $uncatParams[] = $driveId;
-}
-$uncatWhereSql = implode(' AND ', $uncatWhere);
-$uncategorisedSql = "
-    SELECT d.id AS drive_id, d.friendly_name,
-        COUNT(f.id) AS item_count,
-        COALESCE(SUM(f.entry_type = 'file'), 0) AS file_count,
-        COALESCE(SUM(f.entry_type = 'folder'), 0) AS folder_count,
-        COALESCE(SUM(CASE WHEN f.entry_type = 'file' THEN f.size_bytes ELSE 0 END), 0) AS total_size
-    FROM file_entries f
-    JOIN drives d ON d.id = f.drive_id
-    WHERE {$uncatWhereSql}
-    AND NOT EXISTS (SELECT 1 FROM ({$matchSql}) m WHERE m.file_entry_id = f.id)
-    GROUP BY d.id, d.friendly_name
-    ORDER BY d.friendly_name
-";
-$stmt = db()->prepare($uncategorisedSql);
-$stmt->execute($uncatParams);
-$uncategorisedRows = $stmt->fetchAll();
 
 render_header('Category Drive Usage');
 ?>
+<?php if ($error): ?><div class="card"><strong>Error:</strong> <?= e($error) ?></div><?php endif; ?>
+<?php if ($notice): ?><div class="card"><strong>Notice:</strong> <?= e($notice) ?></div><?php endif; ?>
 <div class="card">
     <h2>Category drive usage</h2>
-    <p class="muted">Shows where category data currently lives by drive. Active conflicts are excluded from planner-eligible size to avoid double-counting and future move loops.</p>
+    <p class="muted">Shows where category data currently lives by drive. Usage checks can be expensive, so run them against one drive or category instead of scanning the full inventory at page load.</p>
     <form method="get">
+        <input type="hidden" name="run" value="1">
         <div class="form-grid compact-search">
             <label>Category
                 <select name="category_id">
@@ -183,13 +213,17 @@ render_header('Category Drive Usage');
             <label>Planner size
                 <span><input type="checkbox" name="include_accepted" value="1" <?= $includeAccepted ? 'checked' : '' ?>> Include accepted conflicts</span>
             </label>
+            <label>Extra checks
+                <span><input type="checkbox" name="show_uncategorised" value="1" <?= $showUncategorised ? 'checked' : '' ?>> Also calculate uncategorised by drive</span>
+            </label>
         </div>
-        <div class="button-row"><button type="submit">Filter</button> <a class="button" href="category-drive-usage.php">Clear</a></div>
+        <div class="button-row"><button type="submit">Run usage check</button> <a class="button" href="category-drive-usage.php">Clear</a></div>
     </form>
 </div>
 
 <div class="card">
     <h2>Usage by category and drive</h2>
+    <?php if (!$runScan || !$hasNarrowFilter): ?><p class="muted">No usage check has been run yet.</p><?php endif; ?>
     <div class="table-scroll">
         <table class="auto-table compact-table">
             <thead><tr><th>Category</th><th>Drive</th><th>Items</th><th>Files</th><th>Folders</th><th>Total file size</th><th>Manual</th><th>Rule</th><th>Both</th><th>Active conflict size</th><th>Accepted conflict size</th><th>Planner eligible</th><th>Actions</th></tr></thead>
@@ -212,7 +246,8 @@ render_header('Category Drive Usage');
                     <td class="actions"><a class="button" href="category-preview.php?view_mode=category&category_id=<?= e((string)$row['category_id']) ?>&drive_id=<?= e((string)$row['drive_id']) ?>&source=<?= e($source) ?>">Preview</a></td>
                 </tr>
             <?php endforeach; ?>
-            <?php if (!$usageRows): ?><tr><td colspan="13">No category usage found.</td></tr><?php endif; ?>
+            <?php if ($runScan && $hasNarrowFilter && !$usageRows): ?><tr><td colspan="13">No category usage found.</td></tr><?php endif; ?>
+            <?php if (!$runScan || !$hasNarrowFilter): ?><tr><td colspan="13">Run a filtered usage check to show results.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>
@@ -220,6 +255,7 @@ render_header('Category Drive Usage');
 
 <div class="card">
     <h2>Uncategorised by drive</h2>
+    <?php if (!$showUncategorised): ?><p class="muted">Tick “Also calculate uncategorised by drive” and run the check to load this slower section.</p><?php endif; ?>
     <div class="table-scroll">
         <table class="auto-table compact-table">
             <thead><tr><th>Drive</th><th>Items</th><th>Files</th><th>Folders</th><th>Total file size</th><th>Action</th></tr></thead>
@@ -231,10 +267,11 @@ render_header('Category Drive Usage');
                     <td><?= e(number_format((int)$row['file_count'])) ?></td>
                     <td><?= e(number_format((int)$row['folder_count'])) ?></td>
                     <td><?= e(format_bytes((int)$row['total_size'])) ?></td>
-                    <td><a class="button" href="category-preview.php?view_mode=uncategorised&drive_id=<?= e((string)$row['drive_id']) ?>&source=both">Review</a></td>
+                    <td><a class="button" href="category-status.php?drive_id=<?= e((string)$row['drive_id']) ?>&path=&page=1&mode=unassigned#category-status-explorer">Review</a></td>
                 </tr>
             <?php endforeach; ?>
-            <?php if (!$uncategorisedRows): ?><tr><td colspan="6">No uncategorised inventory found.</td></tr><?php endif; ?>
+            <?php if ($showUncategorised && !$uncategorisedRows): ?><tr><td colspan="6">No uncategorised inventory found.</td></tr><?php endif; ?>
+            <?php if (!$showUncategorised): ?><tr><td colspan="6">Uncategorised calculation not run.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>
