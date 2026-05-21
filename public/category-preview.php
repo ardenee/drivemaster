@@ -5,6 +5,8 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 require __DIR__ . '/_layout.php';
 
+use DriveMaster\Support\IgnoredFolderSql;
+
 const CATEGORY_PREVIEW_PAGE_SIZE = 990;
 
 function cp_link(array $params = []): string
@@ -68,15 +70,16 @@ function cp_sources_for_entry(array $entry, int $categoryId): string
     }
 
     $sources = [];
+    $visibleSql = IgnoredFolderSql::excludeCondition('f');
 
-    $manualSql = "SELECT 1 FROM file_entries f WHERE f.id = ? AND " . cp_manual_exists_sql('f');
+    $manualSql = "SELECT 1 FROM file_entries f WHERE f.id = ? AND {$visibleSql} AND " . cp_manual_exists_sql('f');
     $stmt = db()->prepare($manualSql);
     $stmt->execute([(int)$entry['id'], $categoryId]);
     if ($stmt->fetchColumn()) {
         $sources[] = '<span class="category-badge category-manual">manual</span>';
     }
 
-    $ruleSql = "SELECT 1 FROM file_entries f WHERE f.id = ? AND " . cp_rule_exists_sql('f');
+    $ruleSql = "SELECT 1 FROM file_entries f WHERE f.id = ? AND {$visibleSql} AND " . cp_rule_exists_sql('f');
     $stmt = db()->prepare($ruleSql);
     $stmt->execute([(int)$entry['id'], $categoryId]);
     if ($stmt->fetchColumn()) {
@@ -110,7 +113,7 @@ $nextDir = $dir === 'asc' ? 'desc' : 'asc';
 $categories = db()->query('SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name')->fetchAll();
 $drives = db()->query('SELECT id, friendly_name FROM drives ORDER BY friendly_name')->fetchAll();
 
-$where = ['f.is_missing = 0'];
+$where = ['f.is_missing = 0', IgnoredFolderSql::excludeCondition('f')];
 $params = [];
 if ($viewMode === 'category' && $categoryId > 0) {
     $where[] = cp_category_filter_sql('f', $source);
