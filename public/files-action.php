@@ -5,7 +5,6 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 
 use DriveMaster\Repository\DriveRepository;
-use DriveMaster\Repository\JobRepository;
 use DriveMaster\Support\IgnoredFolderSql;
 
 function fa_redirect(string $url): never
@@ -77,6 +76,15 @@ function fa_validate_mount(array $entry): string
     return $mount;
 }
 
+function fa_validate_drive_mount(array $drive, string $purpose): string
+{
+    $mount = rtrim((string)($drive['mount_path'] ?? ''), "/\\");
+    if ($mount === '' || !is_dir($mount)) {
+        throw new RuntimeException('Connect/verify ' . $purpose . ' drive "' . (string)$drive['friendly_name'] . '" first. Mount path is not available: ' . (string)($drive['mount_path'] ?? ''));
+    }
+    return $mount;
+}
+
 function fa_entry_disk_path(array $entry): string
 {
     return fa_join_path(fa_validate_mount($entry), (string)$entry['relative_path']);
@@ -125,6 +133,20 @@ function fa_extension_for_name(string $name, string $entryType): ?string
     return $ext !== '' ? strtolower($ext) : null;
 }
 
+function fa_ensure_parent_dir(string $path): void
+{
+    $parent = dirname($path);
+    if (is_dir($parent)) {
+        if (!is_writable($parent)) {
+            throw new RuntimeException('Destination parent folder is not writable: ' . $parent);
+        }
+        return;
+    }
+    if (!mkdir($parent, 0775, true) && !is_dir($parent)) {
+        throw new RuntimeException('Could not create destination parent folder: ' . $parent);
+    }
+}
+
 function fa_delete_tree(string $path): void
 {
     if (is_file($path) || is_link($path)) {
@@ -149,6 +171,53 @@ function fa_delete_tree(string $path): void
     if (!rmdir($path)) {
         throw new RuntimeException('Could not delete folder: ' . $path);
     }
+}
+
+function fa_copy_tree(string $source, string $target): void
+{
+    if (is_file($source) || is_link($source)) {
+        fa_ensure_parent_dir($target);
+        if (!copy($source, $target)) {
+            throw new RuntimeException('Could not copy file to destination: ' . $target);
+        }
+        @touch($target, filemtime($source) ?: time());
+        return;
+    }
+    if (!is_dir($source)) {
+        throw new RuntimeException('Source path is not available for copy: ' . $source);
+    }
+    if (!is_dir($target) && !mkdir($target, 0775, true) && !is_dir($target)) {
+        throw new RuntimeException('Could not create destination folder: ' . $target);
+    }
+    $items = scandir($source);
+    if ($items === false) {
+        throw new RuntimeException('Could not read source folder: ' . $source);
+    }
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') {
+            continue;
+        }
+        fa_copy_tree($source . DIRECTORY_SEPARATOR . $item, $target . DIRECTORY_SEPARATOR . $item);
+    }
+}
+
+function fa_move_path(string $source, string $target, string $entryType): void
+{
+    fa_ensure_parent_dir($target);
+    if (file_exists($target)) {
+        throw new RuntimeException('Cannot move because the destination already exists: ' . $target);
+    }
+    if (@rename($source, $target)) {
+        return;
+    }
+    fa_copy_tree($source, $target);
+    if ($entryType === 'file') {
+        if (filesize($source) !== filesize($target)) {
+            @unlink($target);
+            throw new RuntimeException('Copied file size did not match source. Move cancelled: ' . $source);
+        }
+    }
+    fa_delete_tree($source);
 }
 
 function fa_mark_deleted(array $entry): void
@@ -180,6 +249,91 @@ function fa_delete_entries(array $selectedIds): void
         }
         fa_delete_tree($path);
         fa_mark_deleted($entry);
+    }
+}
+
+function fa_update_folder_descendants_after_move(array $entry, int $targetDriveId, string $targetMount): void
+{
+    $oldDriveId = (int)$entry['drive_id'];
+    $oldRelative = trim((string)$entry['relative_path'], '/');
+    $oldPrefix = $oldRelative . '/';
+    $desc = db()->prepare('SELECT id, relative_path FROM file_entries WHERE drive_id = ? AND relative_path LIKE ? ORDER BY LENGTH(relative_path) ASC');
+    $desc->execute([$oldDriveId, $oldPrefix . '%']);
+    $update = db()->prepare('UPDATE file_entries SET drive_id = ?, parent_path = ?, full_path = ?, last_seen_at = NOW() WHERE id = ?');
+    foreach ($desc->fetchAll() as $row) {
+        $relative = (string)$row['relative_path'];
+        $update->execute([$targetDriveId, fa_parent_path($relative), fa_join_path($targetMount, $relative), (int)$row['id']]);
+    }
+
+    $assignments = db()->prepare('SELECT id, path_prefix FROM category_manual_assignments WHERE drive_id = ? AND path_prefix IS NOT NULL AND (path_prefix = ? OR path_prefix LIKE ?)');
+    $assignments->execute([$oldDriveId, $oldRelative, $oldPrefix . '%']);
+    $updateAssignment = db()->prepare('UPDATE category_manual_assignments SET drive_id = ? WHERE id = ?');
+    foreach ($assignments->fetchAll() as $assignment) {
+        $updateAssignment->execute([$targetDriveId, (int)$assignment['id']]);
+    }
+}
+
+function fa_move_entries(array $selectedIds): void
+{
+    $targetDriveId = (int)($_POST['destination_drive_id'] ?? 0);
+    if ($targetDriveId <= 0) {
+        throw new RuntimeException('No destination drive was selected.');
+    }
+
+    $driveRepo = new DriveRepository(db());
+    $targetDrive = $driveRepo->find($targetDriveId);
+    if (!$targetDrive) {
+        throw new RuntimeException('Destination drive was not found.');
+    }
+    $targetMount = fa_validate_drive_mount($targetDrive, 'destination');
+
+    $entries = fa_load_entries($selectedIds);
+    $topLevel = [];
+    foreach ($entries as $entry) {
+        foreach ($entries as $possibleParent) {
+            if ((int)$entry['id'] === (int)$possibleParent['id'] || (string)$possibleParent['entry_type'] !== 'folder') {
+                continue;
+            }
+            $parentPrefix = trim((string)$possibleParent['relative_path'], '/') . '/';
+            if ((int)$entry['drive_id'] === (int)$possibleParent['drive_id'] && str_starts_with(trim((string)$entry['relative_path'], '/'), $parentPrefix)) {
+                continue 2;
+            }
+        }
+        $topLevel[] = $entry;
+    }
+
+    $prepared = [];
+    foreach ($topLevel as $entry) {
+        if ((int)$entry['drive_id'] === $targetDriveId) {
+            throw new RuntimeException('Selected item is already on the destination drive: ' . (string)$entry['relative_path']);
+        }
+        $sourcePath = fa_entry_disk_path($entry);
+        fa_assert_disk_entry_exists($entry, $sourcePath);
+        $targetPath = fa_join_path($targetMount, (string)$entry['relative_path']);
+        if (file_exists($targetPath)) {
+            throw new RuntimeException('Cannot move because the destination already exists: ' . $targetPath);
+        }
+        $prepared[] = ['entry' => $entry, 'source_path' => $sourcePath, 'target_path' => $targetPath];
+    }
+
+    foreach ($prepared as $move) {
+        fa_move_path($move['source_path'], $move['target_path'], (string)$move['entry']['entry_type']);
+        db()->beginTransaction();
+        try {
+            $entry = $move['entry'];
+            $stmt = db()->prepare('UPDATE file_entries SET drive_id = ?, parent_path = ?, full_path = ?, last_seen_at = NOW() WHERE id = ?');
+            $stmt->execute([$targetDriveId, fa_parent_path((string)$entry['relative_path']), $move['target_path'], (int)$entry['id']]);
+            if ((string)$entry['entry_type'] === 'folder') {
+                fa_update_folder_descendants_after_move($entry, $targetDriveId, $targetMount);
+            }
+            db()->commit();
+        } catch (Throwable $e) {
+            db()->rollBack();
+            if (file_exists($move['target_path']) && !file_exists($move['source_path'])) {
+                @rename($move['target_path'], $move['source_path']);
+            }
+            throw $e;
+        }
     }
 }
 
@@ -274,24 +428,10 @@ function fa_add_or_remove_category(string $action, array $selectedIds): void
                 $delete->execute([$categoryId, $entry['drive_id'], $entry['relative_path']]);
             } else {
                 $delete = db()->prepare("DELETE FROM category_manual_assignments WHERE category_id = ? AND file_entry_id = ? AND assignment_type = 'file'");
-                $delete->execute([$categoryId, $entry['id']]);
+                $delete->execute([$categoryId, $entry['id'], $categoryId, $entry['id']]);
             }
         }
     }
-}
-
-function fa_queue_file_job(string $action, array $selectedIds): void
-{
-    $payload = ['file_entry_ids' => $selectedIds];
-
-    if ($action === 'queue_move') {
-        $payload['destination_drive_id'] = (int)($_POST['destination_drive_id'] ?? 0);
-    }
-
-    (new JobRepository(db()))->create(match ($action) {
-        'queue_move' => 'file_move',
-        default => throw new RuntimeException('Unknown file job action.'),
-    }, $payload);
 }
 
 $returnUrl = (string)($_POST['return_url'] ?? 'files.php');
@@ -335,7 +475,7 @@ try {
     }
 
     if ($action === 'move' || $action === 'queue_move') {
-        fa_queue_file_job('queue_move', $selectedIds);
+        fa_move_entries($selectedIds);
         fa_redirect($returnUrl);
     }
 
